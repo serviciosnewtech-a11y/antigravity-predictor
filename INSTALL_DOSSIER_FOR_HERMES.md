@@ -4,9 +4,11 @@
 
 **Target product:** Antigravity Predictor
 
-**Repository:** `https://github.com/serviciosnewtech-a11y/antigravity-predictor.git`
+**Repository page:** `https://github.com/serviciosnewtech-a11y/antigravity-predictor`
 
-**Verified source commit:** `35bca6e3fd7261302ca6ea86f2dc427cb05a90a0`
+**Clone URL:** `https://github.com/serviciosnewtech-a11y/antigravity-predictor.git`
+
+**Verified source commit:** `4c791d4f1d4fbd36642569aa60f0d37bda8e52a6`
 
 **Install root:** `~/antigravity-predictor-test/antigravity-predictor`
 
@@ -35,7 +37,7 @@ Stop immediately and report evidence if any of these are true:
    - `18911`
    - `18912`
 5. Any step requires sudo, destructive host changes, wiping unknown directories, firewall changes, package installation, credential entry, or production exchange setup.
-6. The GitHub clone does not resolve to commit `35bca6e3fd7261302ca6ea86f2dc427cb05a90a0` or a later operator-approved commit.
+6. The GitHub clone does not resolve to commit `4c791d4f1d4fbd36642569aa60f0d37bda8e52a6` or a later operator-approved commit.
 7. A command fails and the next action is not explicitly covered by this dossier or by `diagnose.sh`.
 
 Do not continue under uncertainty. Return a concise blocker report.
@@ -101,7 +103,7 @@ git rev-parse HEAD
 Expected commit unless the operator explicitly approved a newer one:
 
 ```text
-35bca6e3fd7261302ca6ea86f2dc427cb05a90a0
+4c791d4f1d4fbd36642569aa60f0d37bda8e52a6
 ```
 
 Then:
