@@ -1,9 +1,9 @@
 """
-signal_agent/enricher.py — News fetch + Claude API synthesis.
+signal_agent/enricher.py — News fetch + LLM signal synthesis.
 
 Given a Predictor snapshot for one asset, this module:
   1. Searches for recent news about the asset and macro environment.
-  2. Calls the Claude API with both the quantitative signal and the news.
+  2. Calls the configured LLM backend with both the quantitative signal and the news.
   3. Returns a structured EnrichedSignal dict ready to POST to the Predictor.
 """
 from __future__ import annotations
@@ -89,7 +89,7 @@ def fetch_news(asset: str, cfg: SignalAgentConfig) -> list[dict]:
     return items[:cfg.max_news_items]
 
 
-# ── Claude synthesis ──────────────────────────────────────────────────────────
+# ── LLM synthesis ──────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
 You are a concise, factual crypto trading signal analyst for an advisory-only system.
@@ -226,6 +226,44 @@ def call_ollama(prompt: str, cfg: SignalAgentConfig) -> dict:
         return _fallback_signal(f"Ollama error: {e}")
 
 
+def call_openai_compatible(prompt: str, cfg: SignalAgentConfig) -> dict:
+    """Call Hermes proxy or any OpenAI-compatible chat/completions endpoint."""
+    base_url = cfg.hermes_proxy_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
+    payload = {
+        "model": cfg.hermes_inference_model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 512,
+        "temperature": 0.2,
+        "stream": False,
+    }
+    headers = {
+        "Authorization": f"Bearer {cfg.hermes_proxy_api_key or 'local'}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        message = data["choices"][0].get("message", {})
+        raw = message.get("content") or message.get("reasoning") or ""
+        if isinstance(raw, list):
+            raw = "".join(str(part.get("text", part)) if isinstance(part, dict) else str(part) for part in raw)
+        raw = str(raw).strip()
+        if not raw:
+            raise ValueError("OpenAI-compatible backend returned empty message content")
+        return _parse_llm_response(raw)
+    except json.JSONDecodeError as e:
+        logger.error(f"OpenAI-compatible backend returned invalid JSON: {e}")
+        return _fallback_signal(f"OpenAI-compatible JSON parse error: {e}")
+    except Exception as e:
+        logger.error(f"OpenAI-compatible call failed ({base_url}, model={cfg.hermes_inference_model}): {e}")
+        return _fallback_signal(f"OpenAI-compatible error: {e}")
+
+
 def _fallback_signal(reason: str) -> dict:
     return {
         "signal": "NEUTRAL",
@@ -245,7 +283,7 @@ def enrich(asset: str, snapshot: dict, cfg: SignalAgentConfig) -> dict:
     Full enrichment pipeline for one asset:
       1. Fetch news
       2. Build prompt
-      3. Call Claude
+      3. Call configured LLM backend
       4. Return structured payload (ready to POST to /api/enriched-signal/{asset})
     """
     logger.info(f"[enricher] Fetching news for {asset}…")
@@ -256,16 +294,27 @@ def enrich(asset: str, snapshot: dict, cfg: SignalAgentConfig) -> dict:
     prompt = _build_user_prompt(asset, snapshot, news)
 
     backend = cfg.inference_backend.lower()
-    if backend == "ollama":
+    if backend in {"disabled", "none", "off"}:
+        logger.info(f"[enricher] Enrichment disabled for {asset}; returning neutral fallback.")
+        return _fallback_signal("LLM enrichment disabled")
+    if backend in {"openai_compatible", "hermes", "hermes_proxy"}:
+        logger.info(f"[enricher] Calling OpenAI-compatible backend ({cfg.hermes_proxy_url}, model={cfg.hermes_inference_model}) for {asset}…")
+        t1 = time.monotonic()
+        result = call_openai_compatible(prompt, cfg)
+        logger.info(f"[enricher] OpenAI-compatible backend responded in {time.monotonic()-t1:.1f}s")
+    elif backend == "ollama":
         logger.info(f"[enricher] Calling Ollama ({cfg.ollama_url}, model={cfg.ollama_model}) for {asset}…")
         t1 = time.monotonic()
         result = call_ollama(prompt, cfg)
         logger.info(f"[enricher] Ollama responded in {time.monotonic()-t1:.1f}s")
-    else:
+    elif backend == "claude":
         logger.info(f"[enricher] Calling Claude ({cfg.claude_model}) for {asset}…")
         t1 = time.monotonic()
         result = call_claude(prompt, cfg)
         logger.info(f"[enricher] Claude responded in {time.monotonic()-t1:.1f}s")
+    else:
+        logger.error(f"Unknown inference backend: {cfg.inference_backend}")
+        result = _fallback_signal(f"unknown backend: {cfg.inference_backend}")
 
     # Attach metadata
     result["asset"] = asset

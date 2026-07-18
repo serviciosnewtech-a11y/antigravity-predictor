@@ -3,7 +3,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .baseline import BASELINE
+try:
+    from .baseline import BASELINE
+except ImportError:
+    from lgbm_poc.baseline import BASELINE
 
 
 def _utc_datetime(series: pd.Series) -> pd.Series:

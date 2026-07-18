@@ -3,7 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 
-from .baseline import BASELINE
+try:
+    from .baseline import BASELINE
+except ImportError:
+    from lgbm_poc.baseline import BASELINE
 
 
 def label_tp_before_sl_1h(

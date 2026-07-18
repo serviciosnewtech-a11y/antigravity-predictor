@@ -2,6 +2,7 @@
 Antigravity Predictor Server — v2  (BTC / ETH / SOL multi-asset)
 """
 import os, json, asyncio, threading, time
+import xml.etree.ElementTree as ET
 import requests
 import numpy as np
 import pandas as pd
@@ -27,8 +28,70 @@ except Exception as e:
     raise
 
 ASSETS = list(config["assets"].keys())          # ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+DISPLAY_ASSETS = ASSETS + ["XAU/USD"]
+MACRO_DISPLAY_ASSETS = {"XAU/USD"}
+GOLD_PARQUET_PATH = os.environ.get("GOLD_PARQUET_PATH", "/app/data/macro/gold.parquet")
 TIMEFRAME = config.get("timeframe", "15m")
-TF_MINS = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(TIMEFRAME, 15)
+SUPPORTED_TIMEFRAMES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": "D"}
+TF_MINS = SUPPORTED_TIMEFRAMES.get(TIMEFRAME, 15)
+
+def normalise_timeframe(tf: str | None) -> str:
+    tf = (tf or TIMEFRAME).strip().lower()
+    aliases = {"1min": "1m", "5min": "5m", "15min": "15m", "30min": "30m", "60m": "1h", "240m": "4h", "d": "1d", "day": "1d"}
+    tf = aliases.get(tf, tf)
+    if tf not in SUPPORTED_TIMEFRAMES:
+        raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {tf}")
+    return tf
+
+def bybit_interval(tf: str):
+    return SUPPORTED_TIMEFRAMES[normalise_timeframe(tf)]
+
+def is_macro_display_asset(symbol: str | None) -> bool:
+    return (symbol or "").upper() in MACRO_DISPLAY_ASSETS
+
+def _required_col(df: pd.DataFrame, *names: str) -> str:
+    lookup = {str(c).lower(): c for c in df.columns}
+    for name in names:
+        if name.lower() in lookup:
+            return lookup[name.lower()]
+    raise HTTPException(status_code=503, detail=f"Gold macro feed missing column: {names[0]}")
+
+def fetch_gold_daily_candles(limit: int = 300) -> list[dict]:
+    """Return real daily Gold candles from the mounted macro dataset."""
+    if not os.path.exists(GOLD_PARQUET_PATH):
+        raise HTTPException(status_code=503, detail="Gold macro feed unavailable")
+    df = pd.read_parquet(GOLD_PARQUET_PATH).sort_index()
+    if "timestamp" in df.columns:
+        ts = pd.to_datetime(df["timestamp"], utc=True)
+    elif "date" in df.columns:
+        ts = pd.to_datetime(df["date"], utc=True)
+    else:
+        ts = pd.Series(pd.to_datetime(df.index, utc=True), index=df.index)
+    open_col = _required_col(df, "open", "Open")
+    high_col = _required_col(df, "high", "High")
+    low_col = _required_col(df, "low", "Low")
+    close_col = _required_col(df, "close", "Close", "adj_close", "Adj Close")
+    volume_col = None
+    try:
+        volume_col = _required_col(df, "volume", "Volume")
+    except HTTPException:
+        volume_col = None
+    rows = []
+    for idx in range(len(df)):
+        row = df.iloc[idx]
+        try:
+            rows.append({
+                "time": int(ts.iloc[idx].timestamp()),
+                "open": float(row[open_col]),
+                "high": float(row[high_col]),
+                "low": float(row[low_col]),
+                "close": float(row[close_col]),
+                "volume": float(row[volume_col]) if volume_col else 0.0,
+                "source": "macro_gold_parquet",
+            })
+        except Exception:
+            continue
+    return rows[-max(1, min(limit, 1000)):]
 
 # ── WebSocket Connection Manager ─────────────────────────────────────────────
 class ConnectionManager:
@@ -175,6 +238,8 @@ class AssetEngine:
         self.model_long  = None
         self.model_short = None
         self.feature_names: list[str] = []
+        self.missing_features: list[str] = []
+        self.degraded = False
         self.candles: list[dict] = []
         self.latest_prediction_long  = 0.0
         self.latest_prediction_short = 0.0
@@ -240,6 +305,15 @@ class AssetEngine:
             if "fvg_bearish_strength" in self.feature_names and "fvg_bearish_strength" not in feats.columns:
                 feats["fvg_bearish_strength"] = feats["fvg_size_atr"] * feats["bearish_fvg_present"]
 
+            missing = [col for col in self.feature_names if col not in feats.columns]
+            if missing != self.missing_features:
+                self.missing_features = missing
+                if missing:
+                    logger.warning(f"[{self.symbol}] Zero-filling {len(missing)} missing model features: {missing}")
+                else:
+                    logger.success(f"[{self.symbol}] All model features present.")
+            self.degraded = bool(missing)
+
             for col in self.feature_names:
                 if col not in feats.columns:
                     feats[col] = 0.0
@@ -277,6 +351,8 @@ class AssetEngine:
                     "prediction_short": self.latest_prediction_short,
                     "signal": self.latest_signal,
                     "position": self.position,
+                    "degraded": self.degraded,
+                    "missing_features": self.missing_features,
                     "stats": self._stats(),
                 }),
                 loop,
@@ -368,6 +444,8 @@ class AssetEngine:
                 "latest_prediction_short": self.latest_prediction_short,
                 "latest_signal": self.latest_signal,
                 "position": self.position,
+                "degraded": self.degraded,
+                "missing_features": list(self.missing_features),
                 "candles": list(self.candles),
                 "trades": list(self.trades_history),
                 "stats": self._stats(),
@@ -434,6 +512,149 @@ def startup_event():
     threading.Thread(target=run_ws_loop, daemon=True).start()
     logger.success("All engines started — Predictor v2 online.")
 
+
+def fetch_display_candles(symbol: str, timeframe: str, limit: int = 300) -> list[dict]:
+    """Fetch display candles for the dashboard timeframe selector.
+
+    This does not change the model's configured prediction timeframe; it only
+    serves chart display data for the client-facing dashboard.
+    """
+    tf = normalise_timeframe(timeframe)
+    if is_macro_display_asset(symbol):
+        if tf != "1d":
+            raise HTTPException(status_code=400, detail="Gold/XAU is available as a real daily macro feed only")
+        return fetch_gold_daily_candles(limit=limit)
+    sym = symbol.replace("/", "")
+    interval = bybit_interval(tf)
+    url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval={interval}&limit={max(1, min(limit, 1000))}"
+    r = requests.get(url, timeout=10)
+    data = r.json()
+    if data.get("retCode") != 0:
+        raise HTTPException(status_code=502, detail=f"Bybit candle fetch failed: {data}")
+    rows = data["result"]["list"]
+    rows.reverse()
+    return [
+        {"time": int(row[0]) // 1000, "open": float(row[1]),
+         "high": float(row[2]), "low": float(row[3]),
+         "close": float(row[4]), "volume": float(row[5])}
+        for row in rows
+    ]
+
+
+def bybit_symbol(symbol: str) -> str:
+    if is_macro_display_asset(symbol):
+        raise HTTPException(status_code=400, detail="Gold/XAU is not a Bybit linear market in this dashboard")
+    sym = symbol if symbol in engines else "BTC/USDT"
+    return sym.replace("/", "")
+
+@app.get("/api/orderbook")
+def get_orderbook(symbol: Optional[str] = Query(default="BTC/USDT"), limit: int = Query(default=10)):
+    sym = symbol if symbol in engines else "BTC/USDT"
+    lim = max(1, min(limit, 50))
+    url = "https://api.bybit.com/v5/market/orderbook"
+    r = requests.get(url, params={"category": "linear", "symbol": bybit_symbol(sym), "limit": lim}, timeout=10)
+    data = r.json()
+    if data.get("retCode") != 0:
+        raise HTTPException(status_code=502, detail=f"Bybit orderbook fetch failed: {data}")
+    result = data.get("result", {})
+    return {
+        "symbol": sym,
+        "source": "bybit",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "bids": [{"price": float(p), "size": float(q)} for p, q in result.get("b", [])[:lim]],
+        "asks": [{"price": float(p), "size": float(q)} for p, q in result.get("a", [])[:lim]],
+    }
+
+@app.get("/api/market-tickers")
+def get_market_tickers():
+    url = "https://api.bybit.com/v5/market/tickers"
+    r = requests.get(url, params={"category": "linear"}, timeout=10)
+    data = r.json()
+    if data.get("retCode") != 0:
+        raise HTTPException(status_code=502, detail=f"Bybit tickers fetch failed: {data}")
+    wanted = {bybit_symbol(sym): sym for sym in engines}
+    out = []
+    for row in data.get("result", {}).get("list", []):
+        raw = row.get("symbol")
+        if raw not in wanted:
+            continue
+        out.append({
+            "symbol": wanted[raw],
+            "last_price": float(row.get("lastPrice") or 0),
+            "change_24h": float(row.get("price24hPcnt") or 0) * 100,
+            "turnover_24h": float(row.get("turnover24h") or 0),
+            "volume_24h": float(row.get("volume24h") or 0),
+            "source": "bybit",
+        })
+    try:
+        gold = fetch_gold_daily_candles(limit=2)
+        if gold:
+            last = gold[-1]
+            prev = gold[-2] if len(gold) > 1 else last
+            pct = ((last["close"] - prev["close"]) / prev["close"] * 100) if prev["close"] else 0.0
+            out.append({
+                "symbol": "XAU/USD",
+                "last_price": last["close"],
+                "change_24h": pct,
+                "turnover_24h": 0,
+                "volume_24h": last.get("volume", 0),
+                "source": "macro_gold_parquet",
+            })
+    except Exception as exc:
+        logger.warning(f"Gold macro ticker unavailable: {exc}")
+    return {"source": "bybit+macro", "assets": out}
+
+@app.get("/api/news")
+def get_news(limit: int = Query(default=8)):
+    feeds = [
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "https://cointelegraph.com/rss",
+    ]
+    items = []
+    for feed_url in feeds:
+        try:
+            r = requests.get(feed_url, timeout=8, headers={"User-Agent": "AntigravityPredictor/1.0"})
+            if r.status_code != 200:
+                continue
+            root = ET.fromstring(r.content)
+            channel_items = root.findall(".//item")
+            for item in channel_items:
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                source = "CoinDesk" if "coindesk" in feed_url else "Cointelegraph"
+                pub = (item.findtext("pubDate") or "").strip()
+                if title:
+                    items.append({"title": title, "source": source, "published": pub, "url": link})
+                if len(items) >= limit:
+                    break
+        except Exception as e:
+            logger.warning(f"news feed failed {feed_url}: {e}")
+        if len(items) >= limit:
+            break
+    return {"source": "rss", "items": items[:max(1, min(limit, 20))]}
+
+@app.get("/api/calendar")
+def get_calendar(limit: int = Query(default=8)):
+    url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
+    items = []
+    try:
+        r = requests.get(url, timeout=8, headers={"User-Agent": "AntigravityPredictor/1.0"})
+        if r.status_code == 200:
+            root = ET.fromstring(r.content)
+            for event in root.findall(".//event"):
+                title = (event.findtext("title") or "").strip()
+                country = (event.findtext("country") or "").strip()
+                date = (event.findtext("date") or "").strip()
+                time_txt = (event.findtext("time") or "").strip()
+                impact = (event.findtext("impact") or "").strip()
+                if title:
+                    items.append({"title": title, "country": country, "date": date, "time": time_txt, "impact": impact, "source": "forexfactory"})
+                if len(items) >= limit:
+                    break
+    except Exception as e:
+        logger.warning(f"calendar feed failed: {e}")
+    return {"source": "forexfactory", "items": items[:max(1, min(limit, 20))]}
+
 # ── REST endpoints ────────────────────────────────────────────────────────────
 @app.get("/api/status")
 def get_status(symbol: Optional[str] = Query(default=None)):
@@ -447,6 +668,8 @@ def get_status(symbol: Optional[str] = Query(default=None)):
             "latest_prediction_short": snap["latest_prediction_short"],
             "latest_signal": snap["latest_signal"],
             "position": snap["position"],
+            "degraded": snap["degraded"],
+            "missing_features": snap["missing_features"],
             "stats": snap["stats"],
         }
     # Return summary for all assets
@@ -460,15 +683,25 @@ def get_status(symbol: Optional[str] = Query(default=None)):
                 "latest_prediction_short": eng.latest_prediction_short,
                 "latest_signal": eng.latest_signal,
                 "position": eng.position,
+                "degraded": eng.degraded,
+                "missing_features": eng.missing_features,
                 "stats": eng._stats(),
             } for sym, eng in engines.items()
         }
     }
 
 @app.get("/api/candles")
-def get_candles(symbol: Optional[str] = Query(default="BTC/USDT")):
+def get_candles(symbol: Optional[str] = Query(default="BTC/USDT"), timeframe: Optional[str] = Query(default=None), limit: int = Query(default=300)):
+    if is_macro_display_asset(symbol):
+        tf = normalise_timeframe(timeframe or "1d")
+        if tf != "1d":
+            raise HTTPException(status_code=400, detail="Gold/XAU is available as a real daily macro feed only")
+        return fetch_gold_daily_candles(limit=limit)
     sym = symbol if symbol in engines else "BTC/USDT"
-    return engines[sym].snapshot()["candles"]
+    tf = normalise_timeframe(timeframe)
+    if tf == TIMEFRAME:
+        return engines[sym].snapshot()["candles"][-max(1, min(limit, 1000)):]
+    return fetch_display_candles(sym, tf, limit=limit)
 
 @app.get("/api/trades")
 def get_trades(symbol: Optional[str] = Query(default=None)):
@@ -482,7 +715,7 @@ def get_trades(symbol: Optional[str] = Query(default=None)):
 
 @app.get("/api/assets")
 def get_assets():
-    return {"assets": ASSETS}
+    return {"assets": DISPLAY_ASSETS}
 
 # ── Enriched signal endpoints (Hermes signal agent ↔ dashboard) ───────────────
 
@@ -542,6 +775,7 @@ class _ChatMsg(BaseModel):
 class _ChatRequest(BaseModel):
     message: str
     symbol: str = "BTC/USDT"
+    language: str = "en"
     history: List[_ChatMsg] = []
 
 
@@ -549,9 +783,9 @@ class _ChatRequest(BaseModel):
 async def hermes_chat(req: _ChatRequest):
     """
     Hermes signal-agent interactive chat.
-    Returns a context-aware reply drawn from the live signal state.
-    If OLLAMA_URL is set, forwards to Ollama; otherwise falls back to
-    scripted signal-aware responses so the UI always works.
+    Returns a context-aware reply from a configured real agent/LLM backend.
+    If no backend is reachable, returns 503 agent_unavailable; there is no
+    scripted success fallback.
     """
     sym = req.symbol if req.symbol in engines else "BTC/USDT"
     eng = engines[sym]
@@ -569,6 +803,13 @@ async def hermes_chat(req: _ChatRequest):
         if pos else "flat"
     )
 
+    lang = "es" if str(req.language).lower().startswith("es") else "en"
+    language_rule = (
+        "Respond in Spanish for all client-facing advisory text. "
+        if lang == "es"
+        else "Respond in English for all client-facing advisory text. "
+    )
+
     system_ctx = (
         f"You are Hermes, the signal intelligence agent for the Antigravity Predictor system. "
         f"Current state for {sym}: signal={signal}, long_prob={long_prob:.4f}, "
@@ -576,11 +817,44 @@ async def hermes_chat(req: _ChatRequest):
         f"total_trades={stats['total_trades']}, win_trades={stats['win_trades']}, "
         f"net_pnl={stats['total_pnl']:.2f} USDT. "
         f"Enriched context: {enriched.get('analyst_note', 'none')}. "
-        f"Provide concise advisory signal commentary. "
-        f"You do NOT execute trades. Keep responses under 3 sentences."
+        + language_rule
+        + f"Provide concise advisory signal commentary. "
+        + f"You do NOT execute trades. Keep responses under 3 sentences."
     )
 
-    # ── Try Ollama first ──────────────────────────────────────────────
+    # ── Try HERMES Proxy first ───────────────────────────────────────────────
+    hermes_proxy_url = os.environ.get("HERMES_PROXY_URL", "").rstrip("/")
+    if hermes_proxy_url:
+        try:
+            messages = [{"role": "system", "content": system_ctx}]
+            for h in req.history[-8:]:
+                messages.append({"role": h.role, "content": h.content})
+            messages.append({"role": "user", "content": req.message})
+            resp = requests.post(
+                f"{hermes_proxy_url}/chat/completions",
+                json={
+                    "model": os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k"),
+                    "messages": messages,
+                    "stream": False,
+                },
+                headers={"Authorization": f"Bearer {os.environ.get('HERMES_PROXY_API_KEY', 'local')}"},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                choices = resp.json().get("choices", [])
+                if choices and "message" in choices[0]:
+                    reply = choices[0]["message"].get("content", "").strip()
+                    if reply:
+                        return {
+                            "reply": reply,
+                            "source": "hermes_proxy",
+                            "signal": signal,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+        except Exception as e:
+            logger.warning(f"[hermes-chat] Hermes Proxy unavailable: {e}")
+
+    # ── Try Ollama second ───────────────────────────────────────────────────────
     ollama_url = os.environ.get("OLLAMA_URL", "").rstrip("/")
     if ollama_url:
         try:
@@ -609,52 +883,15 @@ async def hermes_chat(req: _ChatRequest):
         except Exception as e:
             logger.warning(f"[hermes-chat] Ollama unavailable: {e}")
 
-    # ── Scripted fallback (always works, signal-aware) ────────────────
-    msg = req.message.lower()
-    sym_display = sym.split("/")[0]
-
-    if any(w in msg for w in ["help", "what can", "capabilities"]):
-        reply = (
-            "I can report signal state, position status, session PnL, and enriched market context "
-            f"for BTC, ETH, and SOL. Try: 'What is the {sym_display} signal?' or 'Show my stats'."
-        )
-    elif any(w in msg for w in ["position", "trade", "open", "entry", "flat"]):
-        reply = f"[{sym}] Position: {pos_str}."
-        if pos:
-            held = pos.get("candles_held", 0)
-            reply += f" Candles held: {held}."
-    elif any(w in msg for w in ["stat", "pnl", "profit", "performance", "win"]):
-        wr = 100.0 * stats["win_trades"] / stats["total_trades"] if stats["total_trades"] else 0.0
-        reply = (
-            f"[{sym}] Session: {stats['total_trades']} trades | "
-            f"Win rate {wr:.1f}% | Net PnL {stats['total_pnl']:+.2f} USDT."
-        )
-    elif any(w in msg for w in ["enrich", "news", "context", "analyst", "risk"]):
-        note = (
-            enriched.get("analyst_note")
-            or enriched.get("news_summary")
-            or enriched.get("model_context")
-        )
-        if note:
-            reply = f"[{sym}] Enriched context: {note}"
-        else:
-            reply = f"[{sym}] No enriched context available yet. Signal agent has not posted for this asset."
-    else:
-        # Default: report current signal with probabilities
-        sig_text = {
-            "BUY":     f"BUY signal — long probability {long_prob:.3f}. Advisory only.",
-            "SELL":    f"SELL signal — short probability {short_prob:.3f}. Advisory only.",
-            "EXIT":    f"EXIT signal — model suggests closing the active position.",
-            "NEUTRAL": f"NEUTRAL — L={long_prob:.3f} | S={short_prob:.3f}. No high-confidence setup.",
-        }.get(signal, f"Signal: {signal}.")
-        reply = f"[{sym}] {sig_text}"
-
-    return {
-        "reply": reply,
-        "source": "scripted",
-        "signal": signal,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    # ── Error Handling (No scripted fallback) ──────────────────────────────────
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "agent_unavailable",
+            "message": "Agent backend unavailable or disabled",
+            "source": "unavailable",
+        },
+    )
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
@@ -666,7 +903,7 @@ async def ws_endpoint(websocket: WebSocket):
         snaps = {sym: eng.snapshot() for sym, eng in engines.items()}
         await websocket.send_json({
             "type": "init",
-            "assets": ASSETS,
+            "assets": DISPLAY_ASSETS,
             "snapshots": {
                 sym: {
                     "candles":             snap["candles"],

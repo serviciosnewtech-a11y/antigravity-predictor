@@ -23,11 +23,15 @@ services:
       - "${PREDICTOR_PORT:-18910}:18910"
     env_file: .env
     environment:
-      - SA_INFERENCE_BACKEND=${SA_INFERENCE_BACKEND:-ollama}
+      - SA_INFERENCE_BACKEND=${SA_INFERENCE_BACKEND:-disabled}
+      - HERMES_PROXY_URL=${HERMES_PROXY_URL:-http://host.docker.internal:8645/v1}
+      - HERMES_INFERENCE_MODEL=${HERMES_INFERENCE_MODEL:-operator-approved-model}
+      - HERMES_PROXY_API_KEY=${HERMES_PROXY_API_KEY:-local}
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1}
     volumes:
       - ${MODELS_DIR:-./models}:/app/models:ro
+      - ${DATA_DIR:-./data}:/app/data:ro
       - ${LOGS_DIR:-./logs}:/app/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -87,11 +91,13 @@ services:
       - SA_CONFIDENCE_THRESHOLD=${SA_CONFIDENCE_THRESHOLD:-0.22}
       - SA_COOLDOWN_SECONDS=${SA_COOLDOWN_SECONDS:-900}
       - SA_POLL_INTERVAL=${SA_POLL_INTERVAL:-30}
-      - SA_INFERENCE_BACKEND=${SA_INFERENCE_BACKEND:-ollama}
-      # Ollama: running on the Ubuntu host, reachable via host.docker.internal
+      - SA_INFERENCE_BACKEND=${SA_INFERENCE_BACKEND:-disabled}
+      - HERMES_PROXY_URL=${HERMES_PROXY_URL:-http://host.docker.internal:8645/v1}
+      - HERMES_INFERENCE_MODEL=${HERMES_INFERENCE_MODEL:-operator-approved-model}
+      - HERMES_PROXY_API_KEY=${HERMES_PROXY_API_KEY:-local}
+      # Optional advanced fallbacks only
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1}
-      # Claude: only needed when SA_INFERENCE_BACKEND=claude
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - ${LOGS_DIR:-./logs}:/app/logs

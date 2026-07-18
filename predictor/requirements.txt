@@ -4,5 +4,6 @@ websockets
 lightgbm
 pandas
 numpy
+pyarrow
 requests
 loguru

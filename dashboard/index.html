@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Antigravity Predictor Console</title>
-  <meta name="description" content="Multi-asset 15m scalping dashboard with local demo support for XAU/USD">
+  <meta name="description" content="Multi-asset live exchange-data advisory dashboard">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -44,13 +44,22 @@
           <button class="asset-btn" id="btn-SOL/USDT" data-symbol="SOL/USDT">
             <span class="asset-icon sol">◎</span> SOL
           </button>
-          <button class="asset-btn asset-btn-demo" id="btn-XAU/USD" data-symbol="XAU/USD">
-            <span class="asset-icon xau">◌</span> Gold
+          <button class="asset-btn" id="btn-XAU/USD" data-symbol="XAU/USD">
+            <span class="asset-icon gold">Au</span> GOLD
           </button>
         </div>
 
         <div class="divider"></div>
-        <span class="timeframe-label" id="timeframe-display">15M SCALPING</span>
+        <div class="timeframe-selector" id="timeframe-selector" aria-label="Chart timeframe selector">
+          <button class="timeframe-btn" data-timeframe="1m">1M</button>
+          <button class="timeframe-btn" data-timeframe="5m">5M</button>
+          <button class="timeframe-btn active" data-timeframe="15m">15M</button>
+          <button class="timeframe-btn" data-timeframe="30m">30M</button>
+          <button class="timeframe-btn" data-timeframe="1h">1H</button>
+          <button class="timeframe-btn" data-timeframe="4h">4H</button>
+          <button class="timeframe-btn" data-timeframe="1d">1D</button>
+        </div>
+        <span class="timeframe-label" id="timeframe-display">15M DISPLAY</span>
         <div class="divider"></div>
         <div class="ticker-group">
           <span class="ticker-price" id="live-price">$—</span>
@@ -401,7 +410,7 @@
                       <td class="wl-change text-right" id="wl-change-SOL-USDT" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
                     </tr>
                     <tr class="watchlist-row" data-symbol="XAU/USD" id="wl-row-XAU-USD" style="cursor: pointer; transition: background 0.15s;">
-                      <td style="padding: 8px;"><span class="asset-icon xau" style="color: var(--color-gold); margin-right: 6px; font-weight: bold;">◌</span> XAUUSD <span class="demo-chip">demo</span></td>
+                      <td style="padding: 8px;"><span class="asset-icon gold" style="color: #f5c542; margin-right: 6px; font-weight: bold;">Au</span> XAUUSD</td>
                       <td class="wl-price text-right" id="wl-price-XAU-USD" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
                       <td class="wl-change text-right" id="wl-change-XAU-USD" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
                     </tr>
@@ -687,10 +696,10 @@
             </div>
           </div>
 
-          <!-- 12. Order Panel (Simulated Trading) -->
+          <!-- 12. Order Panel (Paper Trading) -->
           <div class="widget-panel" id="widget-order" hidden>
             <div class="panel" style="border-bottom: none;">
-              <div class="panel-header"><h2>Simulated Trading</h2></div>
+              <div class="panel-header"><h2>Paper Trading</h2></div>
               <div class="panel-body scrollable" style="padding:12px; display:flex; flex-direction:column; gap:12px; max-height: calc(100vh - 120px);">
                 <div class="order-form-group" style="background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius);">
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
@@ -719,7 +728,7 @@
                       <span id="order-qty-unit" style="position:absolute; right:10px; font-size:0.65rem; color:var(--color-text-muted); font-weight:600;">BTC</span>
                     </div>
                   </div>
-                  <button id="btn-submit-order" class="asset-btn active" style="width:100%; font-weight:600; padding:10px 0; background:var(--color-green); color:#0f141c; border-color:var(--color-green); box-shadow:0 0 10px rgba(0,230,118,0.2); border-radius: var(--radius); cursor: pointer; transition: all 0.2s;">Place Simulated Order</button>
+                  <button id="btn-submit-order" class="asset-btn active" style="width:100%; font-weight:600; padding:10px 0; background:var(--color-green); color:#0f141c; border-color:var(--color-green); box-shadow:0 0 10px rgba(0,230,118,0.2); border-radius: var(--radius); cursor: pointer; transition: all 0.2s;">Place Paper Order</button>
                 </div>
 
                 <div class="divider" style="margin:5px 0; border-top: 1px solid var(--border-color);"></div>
@@ -900,7 +909,7 @@
             <kbd>1</kbd><span>BTC/USDT</span>
             <kbd>2</kbd><span>ETH/USDT</span>
             <kbd>3</kbd><span>SOL/USDT</span>
-            <kbd>4</kbd><span>XAU/USD (demo)</span>
+            <kbd>4</kbd><span>XAU/USD</span>
           </div>
         </div>
         <div class="shortcut-section">
@@ -923,14 +932,8 @@
     <div class="dw-row"><span class="dw-lbl">V</span><span class="dw-val" id="dw-vol">—</span></div>
   </div>
 
-  <div class="advisory-agent-bubble" id="advisory-agent-bubble" aria-label="Advisory agent bubble">
-    <span class="advisory-agent-title">Advisory Agent</span>
-    <span class="advisory-agent-text" id="advisory-agent-text">15m scalping context only. Non-executing. Placeholder report, not a trade recommendation.</span>
-  </div>
-
-
   <!-- ═══ HERMES CHAT ═══════════════════════════════════════════════ -->
-  <button id="hermes-fab" class="hermes-fab" title="Chat with Hermes">
+  <button id="hermes-fab" class="hermes-fab" title="Chat with Hermes" data-i18n-title="fabTitle">
     <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M3 15.5 L3 4.5 A2 2 0 0 1 5 2.5 L15 2.5 A2 2 0 0 1 17 4.5 L17 11.5 A2 2 0 0 1 15 13.5 L7 13.5 L3 15.5 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
       <circle cx="7.5" cy="8.5" r="1" fill="currentColor"/>
@@ -949,20 +952,46 @@
           <div class="hermes-chat-subtitle" id="hermes-context-label">Signal Agent · BTC/USDT</div>
         </div>
       </div>
-      <button id="hermes-chat-close" class="hermes-chat-close" title="Close">✕</button>
+      <div class="hermes-chat-actions">
+        <button id="hermes-lang-toggle" class="hermes-chat-lang" title="Cambiar idioma / Change language">EN</button>
+        <button id="hermes-chat-expand" class="hermes-chat-close" title="Expand chat" data-i18n-title="expandTitle">□</button>
+        <button id="hermes-chat-close" class="hermes-chat-close" title="Close" data-i18n-title="closeTitle">✕</button>
+      </div>
+    </div>
+    <div class="hermes-signal-context" id="hermes-signal-context">
+      <div class="hermes-signal-topline">
+        <span class="hermes-signal-badge neutral" id="hermes-chat-signal">NEUTRAL</span>
+        <span class="hermes-signal-mode" id="hermes-chat-mode" data-i18n="advisoryMode">Advisory only · No execution</span>
+      </div>
+      <div class="hermes-signal-bars">
+        <div class="hermes-signal-bar-row"><span data-i18n="longLabel">Long</span><div class="hermes-signal-track"><i id="hermes-chat-long-fill"></i></div><b id="hermes-chat-long">—</b></div>
+        <div class="hermes-signal-bar-row"><span data-i18n="shortLabel">Short</span><div class="hermes-signal-track short"><i id="hermes-chat-short-fill"></i></div><b id="hermes-chat-short">—</b></div>
+      </div>
+      <div class="hermes-signal-grid">
+        <div><span data-i18n="entryLabel">Entry</span><b id="hermes-chat-entry">—</b></div>
+        <div><span data-i18n="stopLabel">Stop</span><b id="hermes-chat-sl">—</b></div>
+        <div><span>TP1</span><b id="hermes-chat-tp1">—</b></div>
+        <div><span>R:R</span><b id="hermes-chat-rr">—</b></div>
+      </div>
+      <div class="hermes-proposals" id="hermes-proposals">
+        <button type="button" data-i18n="proposalExplain" data-prompt-en="Explain the current signal and probabilities." data-prompt-es="Explica la señal actual y sus probabilidades.">Explain signal</button>
+        <button type="button" data-i18n="proposalTriggers" data-prompt-en="What would need to change before this becomes actionable?" data-prompt-es="¿Qué tendría que cambiar para que esto sea accionable?">Trigger conditions</button>
+        <button type="button" data-i18n="proposalRisk" data-prompt-en="Review entry, stop loss, take profit, and risk/reward for the current setup." data-prompt-es="Revisa entrada, stop loss, take profit y riesgo/beneficio de la configuración actual.">Risk levels</button>
+        <button type="button" data-i18n="proposalSession" data-prompt-en="Summarize current session performance and open position state." data-prompt-es="Resume el rendimiento de la sesión actual y el estado de la posición abierta.">Session state</button>
+      </div>
     </div>
     <div class="hermes-chat-messages" id="hermes-chat-messages">
       <div class="hermes-msg hermes-msg--system">
         <span class="hermes-msg-sender">Hermes</span>
-        <p>Online. I provide advisory signal context for BTC, ETH, and SOL. Ask me about current signals, position state, or session performance.</p>
+        <p data-i18n="introText">Online. I provide advisory signal context for BTC, ETH, SOL, and daily Gold macro context. Ask me about current signals, position state, or session performance.</p>
       </div>
     </div>
     <div class="hermes-chat-typing" id="hermes-typing" hidden>
       <span></span><span></span><span></span>
     </div>
     <div class="hermes-chat-footer">
-      <input id="hermes-chat-input" class="hermes-chat-input" type="text" placeholder="Ask about signals, positions, stats…" autocomplete="off" />
-      <button id="hermes-chat-send" class="hermes-chat-send" title="Send">
+      <textarea id="hermes-chat-input" class="hermes-chat-input" placeholder="Ask about signals, positions, stats…" autocomplete="off" rows="2"></textarea>
+      <button id="hermes-chat-send" class="hermes-chat-send" title="Send" data-i18n-title="sendTitle">
         <svg viewBox="0 0 18 18"><path d="M2 16 L16 9 L2 2 L2 7.5 L11 9 L2 10.5 Z" fill="currentColor"/></svg>
       </button>
     </div>

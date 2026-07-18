@@ -7,7 +7,10 @@ import json
 import pandas as pd
 from sklearn.metrics import roc_auc_score, log_loss
 
-from .dataset import select_xy
+try:
+    from .dataset import select_xy
+except ImportError:
+    from dataset import select_xy
 
 
 def evaluate_model(model, test_df: pd.DataFrame, label_col: str = "label_tp_before_sl_1h") -> dict:

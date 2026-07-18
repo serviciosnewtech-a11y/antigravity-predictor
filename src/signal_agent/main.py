@@ -5,7 +5,7 @@ signal_agent/main.py — Hermes Signal Agent
 Polls the Antigravity Predictor REST API. When an asset's model probability
 crosses the confidence threshold (and the signal is non-NEUTRAL), fetches
 recent market news via DuckDuckGo and synthesises an enriched signal brief
-via the Claude API. Posts the result back to the Predictor's
+via the configured LLM backend. Posts the result back to the Predictor's
 POST /api/enriched-signal/{asset} endpoint, making it available on the
 dashboard.
 
@@ -16,11 +16,11 @@ Usage:
     # or via systemd: see deploy/signal_agent.service
 
 Environment variables (required):
-    ANTHROPIC_API_KEY   — Anthropic API key for Claude synthesis
+    SA_INFERENCE_BACKEND — default: openai_compatible (Hermes proxy)
 
 Optional env overrides:
     PREDICTOR_URL           — default: http://127.0.0.1:18910
-    SA_CONFIDENCE_THRESHOLD — default: 0.65
+    SA_CONFIDENCE_THRESHOLD — default: 0.22
     SA_COOLDOWN_SECONDS     — default: 900
 """
 from __future__ import annotations
@@ -129,10 +129,20 @@ def run(cfg: SignalAgentConfig) -> None:
     logger.info(f"  Threshold:  {cfg.confidence_threshold}")
     logger.info(f"  Cooldown:   {cfg.cooldown_seconds}s")
     logger.info(f"  Poll every: {cfg.poll_interval_seconds}s")
-    logger.info(f"  Model:      {cfg.claude_model}")
-
-    if not cfg.anthropic_api_key:
-        logger.critical("ANTHROPIC_API_KEY is not set. Agent will run but Claude synthesis will fail.")
+    backend = cfg.inference_backend.lower()
+    logger.info(f"  Backend:    {cfg.inference_backend}")
+    if backend in {"disabled", "none", "off"}:
+        logger.info("  Enrichment: disabled — core predictor/dashboard remains active")
+    elif backend in {"openai_compatible", "hermes", "hermes_proxy"}:
+        logger.info(f"  Model:      {cfg.hermes_inference_model}")
+        logger.info(f"  Base URL:   {cfg.hermes_proxy_url}")
+    elif backend == "ollama":
+        logger.info(f"  Model:      {cfg.ollama_model}")
+        logger.info(f"  Base URL:   {cfg.ollama_url}")
+    elif backend == "claude":
+        logger.info(f"  Model:      {cfg.claude_model}")
+        if not cfg.anthropic_api_key:
+            logger.critical("ANTHROPIC_API_KEY is not set. Claude synthesis will fail.")
 
     last_enriched: dict[str, float] = {}  # asset → monotonic timestamp of last enrichment
 
@@ -149,6 +159,10 @@ def run(cfg: SignalAgentConfig) -> None:
 
 
 def _tick(cfg: SignalAgentConfig, last_enriched: dict[str, float]) -> None:
+    if cfg.inference_backend.lower() in {"disabled", "none", "off"}:
+        logger.debug("LLM enrichment disabled — skipping signal-agent tick.")
+        return
+
     status = _get_status(cfg)
     if status is None:
         logger.warning("Predictor unreachable — will retry next cycle.")

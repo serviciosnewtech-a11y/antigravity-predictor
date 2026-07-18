@@ -8,8 +8,12 @@ import lightgbm as lgb
 import pandas as pd
 from sklearn.metrics import roc_auc_score, log_loss
 
-from .dataset import select_xy
-from .io import ensure_parent
+try:
+    from .dataset import select_xy
+    from .io import ensure_parent
+except ImportError:
+    from dataset import select_xy
+    from io import ensure_parent
 
 
 @dataclass

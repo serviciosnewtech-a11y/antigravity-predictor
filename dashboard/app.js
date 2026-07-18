@@ -15,8 +15,10 @@ const state = {
   // Multi-asset snapshot cache keyed by symbol
   snapshots: {},
 
-  // Active symbol
+  // Active symbol / display timeframe
   activeSymbol: "BTC/USDT",
+  activeTimeframe: "15m",
+  displayCandles: [],
 
   // Thresholds
   buyThreshold:        0.320,
@@ -40,18 +42,113 @@ const state = {
   drawStart:     null,        // {x, y, price, time}
 };
 
-const DEMO_SYMBOL = "XAU/USD";
+function apiBase() {
+  if (window.location.protocol === "file:") return "http://localhost";
+  return `${window.location.protocol}//${window.location.host || "localhost"}`;
+}
 
-function isDemoOnlySymbol(sym) {
-  return sym === DEMO_SYMBOL;
+function wsBase() {
+  if (window.location.protocol === "file:") return "ws://localhost";
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host || "localhost"}`;
+}
+
+function apiCandidates(path) {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (window.location.protocol === "file:") {
+    return [`http://localhost${p}`, `http://127.0.0.1${p}`];
+  }
+  return [`${apiBase()}${p}`];
+}
+
+async function fetchJsonWithFallback(path, options = {}) {
+  const urls = apiCandidates(path);
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, options);
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {
+        data = null;
+      }
+      if (!res.ok) {
+        const msg = data?.message || data?.error || `HTTP ${res.status}`;
+        const err = new Error(msg);
+        err.status = res.status;
+        err.source = data?.source || "error";
+        throw err;
+      }
+      return { data, url };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error(`No API candidates for ${path}`);
+}
+
+function isTypingTarget(target) {
+  const el = target || document.activeElement;
+  if (!el) return false;
+  const tag = (el.tagName || "").toUpperCase();
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return true;
+  if (el.isContentEditable) return true;
+  if (typeof el.closest === "function" && el.closest("input, textarea, select, [contenteditable=\"true\"], #hermes-chat-panel, #widget-chats, #widget-ideas")) return true;
+  return false;
+}
+
+function isDemoOnlySymbol(_sym) {
+  return false;
+}
+
+function isMacroDisplaySymbol(sym) {
+  return sym === "XAU/USD";
+}
+
+function timeframeLabel(tf) {
+  return String(tf || state.activeTimeframe || "15m").toUpperCase();
 }
 
 function formatChartTitle(sym) {
-  return `${sym} · 15M Scalping`;
+  if (isMacroDisplaySymbol(sym)) return `${sym} · 1D Macro Display`;
+  return `${sym} · ${timeframeLabel(state.activeTimeframe)} Display`;
+}
+
+function updateTimeframeUI() {
+  const label = document.getElementById("timeframe-display");
+  if (label) label.textContent = `${timeframeLabel(state.activeTimeframe)} DISPLAY`;
+  document.querySelectorAll("#timeframe-selector .timeframe-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.timeframe === state.activeTimeframe);
+  });
+  const title = document.getElementById("chart-title");
+  if (title) title.textContent = formatChartTitle(state.activeSymbol);
+}
+
+
+function timeframeSeconds(tf) {
+  return ({ "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 })[tf] || 900;
+}
+
+function switchTimeframe(tf) {
+  state.activeTimeframe = tf || "15m";
+  updateTimeframeUI();
+  state.markers = [];
+  if (state.candleSeries) state.candleSeries.setMarkers([]);
+  fetchCandlesForSymbol(state.activeSymbol);
+  updateAdvisoryBubble(state.activeSymbol);
+}
+
+function initTimeframeSelector() {
+  updateTimeframeUI();
+  document.querySelectorAll("#timeframe-selector .timeframe-btn").forEach(btn => {
+    btn.addEventListener("click", () => switchTimeframe(btn.dataset.timeframe));
+  });
 }
 
 function getSymbolSourceLabel(sym) {
-  return isDemoOnlySymbol(sym) ? "Local demo data" : "WS / REST feed";
+  if (isMacroDisplaySymbol(sym)) return "Daily macro feed · Gold futures";
+  return "WS / REST feed";
 }
 
 function updateMarketSourceUI(sym) {
@@ -69,7 +166,12 @@ function updateAdvisoryBubble(sym, signal, enrichedNote) {
   } else if (signal && signal !== "NEUTRAL") {
     bubbleText.textContent = `${s} · Model signal: ${signal}. Advisory only — not a trade recommendation.`;
   } else {
-    bubbleText.textContent = `${s} · 15m scalping advisory. Watching for high-confidence signals.`;
+    if (isMacroDisplaySymbol(s)) {
+      bubbleText.textContent = `${s} · Daily macro reference only. Signal/trading unavailable.`;
+      if (bubble) bubble.classList.remove("signal-active", "signal-sell");
+      return;
+    }
+    bubbleText.textContent = `${s} · ${timeframeLabel(state.activeTimeframe)} display. Watching for high-confidence signals.`;
   }
   if (bubble) {
     bubble.classList.toggle("signal-active", signal === "BUY");
@@ -77,65 +179,14 @@ function updateAdvisoryBubble(sym, signal, enrichedNote) {
   }
 }
 
-function generateDemoSnapshot(sym) {
-  const now = Math.floor(Date.now() / 1000);
-  const interval = 15 * 60;
-  const candles = [];
-  let price = 2362.4;
-
-  for (let i = 160; i > 0; i--) {
-    const time = now - (i * interval);
-    const wave = Math.sin(i / 7) * 6.5 + Math.cos(i / 11) * 3.2;
-    const drift = ((i % 9) - 4) * 0.18;
-    const open = price;
-    const close = Math.max(1800, open + wave + drift);
-    const high = Math.max(open, close) + 2.6 + (i % 3) * 0.7;
-    const low = Math.min(open, close) - 2.1 - (i % 4) * 0.6;
-    const volume = 120 + ((i * 17) % 80);
-
-    candles.push({
-      time,
-      open: Number(open.toFixed(2)),
-      high: Number(high.toFixed(2)),
-      low: Number(low.toFixed(2)),
-      close: Number(close.toFixed(2)),
-      volume: Number(volume.toFixed(0))
-    });
-
-    price = close;
-  }
-
-  return {
-    symbol: sym,
-    candles,
-    prediction_long: 0.0,
-    prediction_short: 0.0,
-    signal: "ADVISORY",
-    position: null,
-    stats: {
-      total_pnl: 0,
-      total_trades: 0,
-      win_trades: 0
-    },
-    demo: true
-  };
-}
-
-function ensureDemoSnapshot(sym) {
-  if (!isDemoOnlySymbol(sym)) return state.snapshots[sym];
-  if (!state.snapshots[sym]) {
-    state.snapshots[sym] = generateDemoSnapshot(sym);
-  }
-  return state.snapshots[sym];
+function ensureDemoSnapshot(_sym) {
+  return null;
 }
 
 function initLocalDemoSnapshots() {
-  const snap = ensureDemoSnapshot(DEMO_SYMBOL);
-  if (snap?.candles?.length) {
-    const last = snap.candles[snap.candles.length - 1];
-    updateWatchlistRow(DEMO_SYMBOL, last.close, last.open);
-  }
+  // No client-facing demo data.
 }
+
 
 // ── Drawing Tool Engine ────────────────────────────────────────────
 const DrawingEngine = (() => {
@@ -1366,7 +1417,7 @@ function initToolbar() {
 
   // Keyboard shortcuts mapping to selectTool
   document.addEventListener("keydown", e => {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (isTypingTarget(e.target)) return;
     const map = {
       "v": "cursor",
       "c": "crosshair",
@@ -1473,8 +1524,9 @@ function initToolbar() {
 
   // ? key opens shortcuts, Esc closes modal
   document.addEventListener("keydown", e => {
-    if (e.key === "?" && !e.ctrlKey && !e.metaKey) { modal.hidden = false; return; }
-    if (e.key === "Escape") { modal.hidden = true; }
+    if (e.key === "Escape") { modal.hidden = true; return; }
+    if (isTypingTarget(e.target)) return;
+    if (e.key === "?" && !e.ctrlKey && !e.metaKey) { modal.hidden = false; e.preventDefault(); return; }
     // Number keys for asset switching
     const assetMap = { "1": "BTC/USDT", "2": "ETH/USDT", "3": "SOL/USDT", "4": "XAU/USD" };
     if (assetMap[e.key] && !e.ctrlKey && !e.metaKey) {
@@ -1515,6 +1567,7 @@ function initAssetSelector() {
 
 function switchAsset(sym) {
   state.activeSymbol = sym;
+  if (isMacroDisplaySymbol(sym)) state.activeTimeframe = "1d";
 
   // Update button states
   document.querySelectorAll("#asset-selector .asset-btn").forEach(b => {
@@ -1531,9 +1584,11 @@ function switchAsset(sym) {
   if (orderAssetTag) orderAssetTag.textContent = sym;
   const orderQtyUnit = document.getElementById("order-qty-unit");
   if (orderQtyUnit) orderQtyUnit.textContent = sym.split("/")[0];
+  updateOrderAvailability(sym);
 
   // Update header labels
   document.getElementById("chart-title").textContent = formatChartTitle(sym);
+  updateTimeframeUI();
   document.getElementById("engine-asset-tag").textContent = sym;
   updateMarketSourceUI(sym);
   updateAdvisoryBubble(sym);
@@ -1559,36 +1614,43 @@ function switchAsset(sym) {
 }
 
 function fetchCandlesForSymbol(sym) {
+  if (isMacroDisplaySymbol(sym)) state.activeTimeframe = "1d";
   if (isDemoOnlySymbol(sym)) {
     const snap = ensureDemoSnapshot(sym);
     if (snap) applySnapshot(sym, snap);
     return;
   }
 
-  const base = `${window.location.protocol}//${window.location.host || "localhost:18910"}`;
   const enc  = encodeURIComponent(sym);
-  fetch(`${base}/api/candles?symbol=${enc}`)
-    .then(r => r.json())
-    .then(candles => {
-      if (candles && candles.length > 0) {
-        state.candleSeries.setData(candles);
-        const last = candles[candles.length - 1];
-        state.predLongSeries.setData([]);
-        state.predShortSeries.setData([]);
-        updateTickerUI(last.close, last.open);
-        state.chart.timeScale().fitContent();
-      }
+  const tf   = encodeURIComponent(state.activeTimeframe || "15m");
+  fetchJsonWithFallback(`/api/candles?symbol=${enc}&timeframe=${tf}&limit=300`)
+    .then(({ data: candles }) => {
+      if (!candles || candles.length === 0) throw new Error(`No ${state.activeTimeframe} candles returned for ${sym}`);
+      state.displayCandles = candles;
+      state.candleSeries.setData(candles);
+      const last = candles[candles.length - 1];
+      state.latestClose = last.close;
+      state.predLongSeries.setData([]);
+      state.predShortSeries.setData([]);
+      updateTickerUI(last.close, last.open);
+      updateWatchlistRow(sym, last.close, last.open);
+      if (isMacroDisplaySymbol(sym)) updateEngineUI(0, 0, "NEUTRAL", null, { total_trades: 0, win_trades: 0, total_pnl: 0 });
+      updateDataWindowPanel(last, state.snapshots[sym]?.prediction_long ?? 0, state.snapshots[sym]?.prediction_short ?? 0, state.snapshots[sym]?.signal ?? "NEUTRAL");
+      state.chart.timeScale().fitContent();
     })
     .catch(e => {
       console.error("fetchCandles:", e);
-      const snap = ensureDemoSnapshot(sym);
-      if (snap) applySnapshot(sym, snap);
+      state.displayCandles = [];
+      if (state.candleSeries) state.candleSeries.setData([]);
+      const title = document.getElementById("chart-title");
+      if (title) title.textContent = `${sym} · ${timeframeLabel(state.activeTimeframe)} unavailable`;
     });
 }
 
 function applySnapshot(sym, snap) {
   if (snap.candles && snap.candles.length > 0) {
-    state.candleSeries.setData(snap.candles);
+    const candles = state.activeTimeframe === "15m" ? snap.candles : state.displayCandles;
+    state.candleSeries.setData(candles && candles.length ? candles : snap.candles);
     state.predLongSeries.setData([]);
     state.predShortSeries.setData([]);
 
@@ -1619,9 +1681,7 @@ function applySnapshot(sym, snap) {
 
 // ── WebSocket ──────────────────────────────────────────────────────
 function connectWS() {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host  = window.location.host || "localhost:18910";
-  const url   = `${proto}//${host}/ws`;
+  const url   = `${wsBase()}/ws`;
 
   const statusEl  = document.getElementById("connection-status");
   const statusTxt = document.getElementById("status-text-disp");
@@ -1636,10 +1696,12 @@ function connectWS() {
 
   state.socket.onmessage = e => {
     try {
+      if (typeof e.data !== "string" || !e.data.trim().startsWith("{")) return;
       const data = JSON.parse(e.data);
       if (data.type === "init")  handleInit(data);
       else if (data.type === "tick") handleTick(data);
-    } catch (err) { console.error("WS parse:", err); }
+      else if (data.type === "enriched_signal") fetchEnrichedSignal(state.activeSymbol);
+    } catch (err) { console.debug("WS ignored non-dashboard message:", err); }
   };
 
   state.socket.onclose = () => {
@@ -1661,8 +1723,7 @@ function handleInit(data) {
         updateWatchlistRow(sym, last.close, last.open);
       }
     });
-    initLocalDemoSnapshots();
-    applySnapshot(state.activeSymbol, state.snapshots[state.activeSymbol]);
+      applySnapshot(state.activeSymbol, state.snapshots[state.activeSymbol]);
     startEnrichedPoll(state.activeSymbol);
   }
 }
@@ -1708,8 +1769,9 @@ function handleTick(data) {
   // Ticker
   updateTickerUI(candle.close, candle.open);
 
-  // Candle + prediction
-  state.candleSeries.update(candle);
+  // Candle + prediction (live WS updates the model timeframe; other display
+  // timeframes are refreshed through REST selection to avoid mixing intervals).
+  if (state.activeTimeframe === "15m") state.candleSeries.update(candle);
   state.predLongSeries.setData([]);
   state.predShortSeries.setData([]);
 
@@ -1752,6 +1814,17 @@ function updateTickerUI(price, open) {
   changeEl.className   = `ticker-change ${pct >= 0 ? "up" : "down"}`;
 }
 
+function updateOrderAvailability(sym) {
+  const disabled = isMacroDisplaySymbol(sym);
+  ["order-buy-btn", "order-sell-btn", "btn-submit-order"].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = disabled;
+    el.title = disabled ? "Gold macro reference only — paper trading unavailable" : "";
+    el.style.opacity = disabled ? "0.45" : "";
+  });
+}
+
 function updateEngineUI(predL, predS, signal, position, stats) {
   // ── Signal badge ──────────────────────────────────────────────────
   const badge = document.getElementById("agent-signal-badge");
@@ -1791,7 +1864,9 @@ function updateEngineUI(predL, predS, signal, position, stats) {
   // ── Agent report note ─────────────────────────────────────────────
   const noteEl = document.getElementById("agent-report-note");
   if (noteEl) {
-    if (signal && signal !== "NEUTRAL") {
+    if (isMacroDisplaySymbol(state.activeSymbol)) {
+      noteEl.textContent = "Gold macro reference only — signal/trading unavailable.";
+    } else if (signal && signal !== "NEUTRAL") {
       noteEl.textContent = `Position: ${position || "flat"} · Advisory only, no execution.`;
     } else {
       noteEl.textContent = "No active signal. Monitoring 15m candles.";
@@ -1814,6 +1889,7 @@ function updateEngineUI(predL, predS, signal, position, stats) {
     const ttEl = document.getElementById("total-trades-disp");
     if (ttEl) ttEl.textContent = stats.total_trades ?? 0;
   }
+  if (window.__updateHermesChatSignalContext) window.__updateHermesChatSignalContext();
 }
 
 // ── ATR-based price levels ─────────────────────────────────────────
@@ -1849,6 +1925,7 @@ function updatePriceLevels(signal, close, atr) {
   set("level-tp2",   fmt(tp2));
   set("level-atr",   `$${atr.toFixed(2)}`);
   set("level-rr",    `${rr}:1`);
+  if (window.__updateHermesChatSignalContext) window.__updateHermesChatSignalContext();
 }
 
 function addMarker(time, type, price) {
@@ -1871,7 +1948,7 @@ function addMarker(time, type, price) {
 
 function fetchEnrichedSignal(sym) {
   const s    = sym || state.activeSymbol;
-  const base = `${window.location.protocol}//${window.location.host || "localhost:18910"}`;
+  const base = apiBase();
   const key  = s.replace("/", "_");
 
   fetch(`${base}/api/enriched-signal/${key}`)
@@ -1931,7 +2008,7 @@ function startEnrichedPoll(sym) {
 
 // ── Trades Table ───────────────────────────────────────────────────
 function fetchTradesHistory(sym) {
-  const base = `${window.location.protocol}//${window.location.host || "localhost:18910"}`;
+  const base = apiBase();
   const enc  = encodeURIComponent(sym || state.activeSymbol);
   fetch(`${base}/api/trades?symbol=${enc}`)
     .then(r => r.json())
@@ -2017,76 +2094,69 @@ function updateWatchlistRow(sym, price, open) {
   changeEl.className = `wl-change text-right ${isUp ? "text-green" : "text-red"}`;
 }
 
-// ── DOM Simulator ────────────────────────────────────────────────
+// ── DOM / Order Book ─────────────────────────────────────────────
 function updateDOM(price) {
   const sym = state.activeSymbol;
   if (!sym) return;
-
-  const isBTC = sym.startsWith("BTC");
-  const isETH = sym.startsWith("ETH");
-  const isXAU = isDemoOnlySymbol(sym);
-  const step = isBTC ? 0.5 : (isETH ? 0.05 : (isXAU ? 0.1 : 0.01));
-  const sizeMin = isBTC ? 0.05 : (isETH ? 0.5 : (isXAU ? 2 : 5));
-  const sizeMax = isBTC ? 1.8 : (isETH ? 22 : (isXAU ? 36 : 350));
-  const decimals = isBTC ? 1 : (isXAU ? 1 : 2);
 
   const asksContainer = document.getElementById("dom-asks-container");
   const bidsContainer = document.getElementById("dom-bids-container");
   const midPriceEl = document.getElementById("dom-mid-price");
   const spreadEl = document.getElementById("dom-spread");
-
   if (!asksContainer || !bidsContainer || !midPriceEl || !spreadEl) return;
 
-  midPriceEl.textContent = price.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  const spread = step;
-  spreadEl.textContent = `Spread: ${spread.toFixed(decimals)} USDT`;
-
-  let asks = [];
-  let bids = [];
-  let cumulativeAsk = 0;
-  let cumulativeBid = 0;
-
-  for (let i = 1; i <= 5; i++) {
-    const askPrice = price + (i * step);
-    const askSize = sizeMin + Math.random() * (sizeMax - sizeMin);
-    cumulativeAsk += askSize;
-    asks.push({ price: askPrice, size: askSize });
-
-    const bidPrice = price - (i * step);
-    const bidSize = sizeMin + Math.random() * (sizeMax - sizeMin);
-    cumulativeBid += bidSize;
-    bids.push({ price: bidPrice, size: bidSize });
-  }
-
-  const maxTotal = Math.max(cumulativeAsk, cumulativeBid) || 1;
-
-  asksContainer.innerHTML = "";
-  asks.forEach(lvl => {
-    const pct = (lvl.size / maxTotal) * 100;
-    const row = document.createElement("div");
-    row.className = "dom-level-row";
-    row.innerHTML = `
-      <div class="dom-size">${lvl.size.toFixed(isBTC ? 3 : (isETH ? 2 : 1))}</div>
-      <div class="dom-price text-red">${lvl.price.toFixed(decimals)}</div>
-      <div class="dom-depth-pct">${pct.toFixed(0)}%</div>
-      <div class="dom-bar ask" style="width: ${pct}%"></div>
-    `;
-    asksContainer.appendChild(row);
-  });
-
-  bidsContainer.innerHTML = "";
-  bids.forEach(lvl => {
-    const pct = (lvl.size / maxTotal) * 100;
-    const row = document.createElement("div");
-    row.className = "dom-level-row";
-    row.innerHTML = `
-      <div class="dom-size">${lvl.size.toFixed(isBTC ? 3 : (isETH ? 2 : 1))}</div>
-      <div class="dom-price text-green">${lvl.price.toFixed(decimals)}</div>
-      <div class="dom-depth-pct">${pct.toFixed(0)}%</div>
-      <div class="dom-bar bid" style="width: ${pct}%"></div>
-    `;
-    bidsContainer.appendChild(row);
-  });
+  const decimals = sym.startsWith("BTC") ? 1 : 2;
+  const base = apiBase();
+  const enc = encodeURIComponent(sym);
+  fetch(`${base}/api/orderbook?symbol=${enc}&limit=10`)
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(book => {
+      const bids = book.bids || [];
+      const asks = book.asks || [];
+      if (!bids.length || !asks.length) throw new Error("empty orderbook");
+      const bestBid = bids[0].price;
+      const bestAsk = asks[0].price;
+      const mid = (bestBid + bestAsk) / 2;
+      midPriceEl.textContent = mid.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+      spreadEl.textContent = `Spread: ${(bestAsk - bestBid).toFixed(decimals)} USDT · Bybit`;
+      const maxSize = Math.max(...bids.map(x => x.size), ...asks.map(x => x.size), 1);
+      asksContainer.innerHTML = "";
+      [...asks].reverse().forEach(lvl => {
+        const pct = Math.max(3, (lvl.size / maxSize) * 100);
+        const row = document.createElement("div");
+        row.className = "dom-level-row";
+        row.innerHTML = `
+          <div class="dom-size">${lvl.size.toLocaleString(undefined, { maximumFractionDigits: 3 })}</div>
+          <div class="dom-price text-red">${lvl.price.toFixed(decimals)}</div>
+          <div class="dom-depth-pct">${pct.toFixed(0)}%</div>
+          <div class="dom-bar ask" style="width: ${Math.min(pct, 100)}%"></div>
+        `;
+        asksContainer.appendChild(row);
+      });
+      bidsContainer.innerHTML = "";
+      bids.forEach(lvl => {
+        const pct = Math.max(3, (lvl.size / maxSize) * 100);
+        const row = document.createElement("div");
+        row.className = "dom-level-row";
+        row.innerHTML = `
+          <div class="dom-size">${lvl.size.toLocaleString(undefined, { maximumFractionDigits: 3 })}</div>
+          <div class="dom-price text-green">${lvl.price.toFixed(decimals)}</div>
+          <div class="dom-depth-pct">${pct.toFixed(0)}%</div>
+          <div class="dom-bar bid" style="width: ${Math.min(pct, 100)}%"></div>
+        `;
+        bidsContainer.appendChild(row);
+      });
+    })
+    .catch(e => {
+      console.error("orderbook:", e);
+      midPriceEl.textContent = price ? price.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : "—";
+      spreadEl.textContent = "Order book unavailable";
+      asksContainer.innerHTML = '<div class="empty-state text-center">Live order book unavailable.</div>';
+      bidsContainer.innerHTML = '<div class="empty-state text-center">Live order book unavailable.</div>';
+    });
 }
 
 // ── Hotlists Updater ─────────────────────────────────────────────
@@ -2095,54 +2165,41 @@ function updateHotlists() {
   const gainersBody = document.getElementById("hotlist-gainers-body");
   if (!volBody || !gainersBody) return;
 
-  const assets = [
-    { sym: "BTC/USDT", price: 0, chg: 0, vol: "142.5M" },
-    { sym: "ETH/USDT", price: 0, chg: 0, vol: "89.2M" },
-    { sym: "SOL/USDT", price: 0, chg: 0, vol: "54.8M" },
-    { sym: "XAU/USD", price: 0, chg: 0, vol: "Local demo" },
-    { sym: "XRP/USDT", price: 0.4850, chg: 1.25, vol: "32.1M" },
-    { sym: "DOGE/USDT", price: 0.1245, chg: -2.48, vol: "28.6M" },
-    { sym: "ADA/USDT", price: 0.3820, chg: -0.85, vol: "12.4M" }
-  ];
-
-  Object.keys(state.snapshots).forEach(sym => {
-    const snap = state.snapshots[sym];
-    if (snap && snap.candles && snap.candles.length > 0) {
-      const last = snap.candles[snap.candles.length - 1];
-      const p = last.close;
-      const o = last.open;
-      const chg = ((p - o) / o) * 100;
-      const matching = assets.find(a => a.sym === sym);
-      if (matching) {
-        matching.price = p;
-        matching.chg = chg;
-      }
-    }
-  });
-
-  volBody.innerHTML = "";
-  assets.forEach(a => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td style="padding:6px 4px; font-weight:600;">${a.sym.split("/")[0]}USD</td>
-      <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); font-size:0.75rem;">$${a.price > 0 ? a.price.toLocaleString(undefined, { minimumFractionDigits: 2 }) : a.price.toFixed(4)}</td>
-      <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); color:var(--color-text-muted); font-size:0.72rem;">${a.vol}</td>
-    `;
-    volBody.appendChild(tr);
-  });
-
-  gainersBody.innerHTML = "";
-  const sortedGainers = [...assets].sort((a, b) => b.chg - a.chg);
-  sortedGainers.forEach(a => {
-    const tr = document.createElement("tr");
-    const isUp = a.chg >= 0;
-    tr.innerHTML = `
-      <td style="padding:6px 4px; font-weight:600;">${a.sym.split("/")[0]}USD</td>
-      <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); font-weight:bold; font-size:0.75rem;" class="${isUp ? 'text-green' : 'text-red'}">${isUp ? '+' : ''}${a.chg.toFixed(2)}%</td>
-      <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); font-size:0.75rem;">$${a.price > 0 ? a.price.toLocaleString(undefined, { minimumFractionDigits: 2 }) : a.price.toFixed(4)}</td>
-    `;
-    gainersBody.appendChild(tr);
-  });
+  fetch(`${apiBase()}/api/market-tickers`)
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      const assets = data.assets || [];
+      if (!assets.length) throw new Error("empty market tickers");
+      volBody.innerHTML = "";
+      [...assets].sort((a, b) => b.turnover_24h - a.turnover_24h).forEach(a => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td style="padding:6px 4px; font-weight:600;">${a.symbol.split("/")[0]}USD</td>
+          <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); font-size:0.75rem;">$${a.last_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+          <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); color:var(--color-text-muted); font-size:0.72rem;">${a.turnover_24h.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+        `;
+        volBody.appendChild(tr);
+      });
+      gainersBody.innerHTML = "";
+      [...assets].sort((a, b) => b.change_24h - a.change_24h).forEach(a => {
+        const tr = document.createElement("tr");
+        const isUp = a.change_24h >= 0;
+        tr.innerHTML = `
+          <td style="padding:6px 4px; font-weight:600;">${a.symbol.split("/")[0]}USD</td>
+          <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); font-weight:bold; font-size:0.75rem;" class="${isUp ? 'text-green' : 'text-red'}">${isUp ? '+' : ''}${a.change_24h.toFixed(2)}%</td>
+          <td style="padding:6px 4px; text-align:right; font-family:var(--font-mono); font-size:0.75rem;">$${a.last_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+        `;
+        gainersBody.appendChild(tr);
+      });
+    })
+    .catch(e => {
+      console.error("market-tickers:", e);
+      volBody.innerHTML = '<tr><td colspan="3" class="empty-state text-center">Live exchange ticker data unavailable.</td></tr>';
+      gainersBody.innerHTML = '<tr><td colspan="3" class="empty-state text-center">Live exchange ticker data unavailable.</td></tr>';
+    });
 }
 
 // ── Data Window panel update ─────────────────────────────────────
@@ -2169,9 +2226,9 @@ function updateDataWindowPanel(candle, prediction_long, prediction_short, signal
   lEl.textContent = candle.low.toLocaleString();
   cEl.textContent = candle.close.toLocaleString();
   vEl.textContent = candle.volume.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  modeEl.textContent = "15m scalping";
+  modeEl.textContent = `${timeframeLabel(state.activeTimeframe)} display`;
   sourceEl.textContent = getSymbolSourceLabel(state.activeSymbol);
-  advisoryEl.textContent = "Placeholder only";
+  advisoryEl.textContent = "Live exchange feed";
   advisoryEl.className = "text-muted";
 }
 
@@ -2311,7 +2368,7 @@ window.syncObjectTree = function() {
       } else {
         const snap = state.snapshots[sym];
         if (snap && snap.candles && snap.candles.length > 0) {
-          price = snap.snapshots[sym].candles[snap.snapshots[sym].candles.length - 1].close;
+          price = snap.candles[snap.candles.length - 1].close;
         } else {
           // fallback to UI live ticker price
           const priceTxt = document.getElementById("live-price").textContent.replace("$","").replace(/,/g,"");
@@ -2417,20 +2474,8 @@ window.syncObjectTree = function() {
   }
 
   // ── News and Events ──────────────────────────────────────────────
-  const mockNews = [
-    { title: "Bybit swap volumes hit record high as volatility returns", source: "CoinDesk", age: "5m ago" },
-    { title: "Ethereum gas consumption drops to yearly lows amid Layer 2 migration", source: "CoinTelegraph", age: "12m ago" },
-    { title: "Solana DeFi TVL surpasses $5B as liquid staking projects gain traction", source: "Blockworks", age: "25m ago" },
-    { title: "Macro Alert: US inflation metrics prompt spikes in crypto perpetuals", source: "Bloomberg", age: "42m ago" },
-    { title: "Bitcoin funding rates reset to neutral, clearing path for next move", source: "CryptoSlate", age: "1h ago" }
-  ];
-
-  const calendarEvents = [
-    { title: "US Core CPI YoY (May)", time: "Today, 15:30", impact: "High" },
-    { title: "Federal Reserve Interest Rate Decision", time: "Tomorrow, 21:00", impact: "Critical" },
-    { title: "Solana Mainnet Core Upgrade v1.18.15", time: "Jun 24, 04:00", impact: "Medium" },
-    { title: "Ethereum developer meeting: Pectra Upgrade specs", time: "Jun 26, 17:00", impact: "Low" }
-  ];
+  // No fabricated client-facing news/calendar data. These panels stay explicit
+  // until a real news/calendar feed is wired.
 
   const chatSendBtn = document.getElementById("btn-send-chat");
   const chatInputField = document.getElementById("chat-input-field");
@@ -2439,89 +2484,76 @@ window.syncObjectTree = function() {
   function initNewsAndCalendar() {
     const newsContainer = document.getElementById("news-container");
     if (newsContainer) {
-      newsContainer.innerHTML = "";
-      mockNews.forEach(item => {
-        const div = document.createElement("div");
-        div.className = "news-item";
-        div.innerHTML = `
-          <div style="font-weight:600; color:var(--color-text-main);">${item.title}</div>
-          <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--color-text-muted); margin-top:4px;">
-            <span>${item.source}</span>
-            <span>${item.age}</span>
-          </div>
-        `;
-        newsContainer.appendChild(div);
-      });
+      newsContainer.innerHTML = '<div class="empty-state text-center">Loading live news…</div>';
+      fetch(`${apiBase()}/api/news?limit=8`)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(data => {
+          const items = data.items || [];
+          if (!items.length) {
+            newsContainer.innerHTML = '<div class="empty-state text-center">Live news feed has no current items.</div>';
+            return;
+          }
+          newsContainer.innerHTML = "";
+          items.forEach(item => {
+            const div = document.createElement("div");
+            div.className = "news-item";
+            div.innerHTML = `
+              <div style="font-weight:600; color:var(--color-text-main);">${item.title}</div>
+              <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--color-text-muted); margin-top:4px;">
+                <span>${item.source || "RSS"}</span>
+                <span>${item.published || "Live feed"}</span>
+              </div>
+            `;
+            newsContainer.appendChild(div);
+          });
+        })
+        .catch(e => {
+          console.error("news:", e);
+          newsContainer.innerHTML = '<div class="empty-state text-center">Live news feed unavailable.</div>';
+        });
     }
 
     const calendarContainer = document.getElementById("calendar-events-container");
     if (calendarContainer) {
-      calendarContainer.innerHTML = "";
-      calendarEvents.forEach(item => {
-        const div = document.createElement("div");
-        div.className = "calendar-item";
-        const impactColor = item.impact === "Critical" ? "var(--color-red)" : (item.impact === "High" ? "var(--color-gold)" : "var(--color-blue)");
-        div.innerHTML = `
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span style="font-weight:600; color:var(--color-text-main);">${item.title}</span>
-            <span style="font-size:0.6rem; font-weight:bold; color:#0f141c; background:${impactColor}; padding:1px 4px; border-radius:3px;">${item.impact}</span>
-          </div>
-          <div class="event-time" style="margin-top:4px;">${item.time}</div>
-        `;
-        calendarContainer.appendChild(div);
-      });
+      calendarContainer.innerHTML = '<div class="empty-state text-center">Loading live economic calendar…</div>';
+      fetch(`${apiBase()}/api/calendar?limit=8`)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(data => {
+          const items = data.items || [];
+          if (!items.length) {
+            calendarContainer.innerHTML = '<div class="empty-state text-center">Live economic calendar has no current events.</div>';
+            return;
+          }
+          calendarContainer.innerHTML = "";
+          items.forEach(item => {
+            const div = document.createElement("div");
+            div.className = "calendar-item";
+            const impact = item.impact || "—";
+            const impactColor = impact === "High" ? "var(--color-gold)" : (impact === "Medium" ? "var(--color-blue)" : "var(--color-text-muted)");
+            div.innerHTML = `
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-weight:600; color:var(--color-text-main);">${item.title}</span>
+                <span style="font-size:0.6rem; font-weight:bold; color:#0f141c; background:${impactColor}; padding:1px 4px; border-radius:3px;">${impact}</span>
+              </div>
+              <div class="event-time" style="margin-top:4px;">${[item.country, item.date, item.time].filter(Boolean).join(" · ")}</div>
+            `;
+            calendarContainer.appendChild(div);
+          });
+        })
+        .catch(e => {
+          console.error("calendar:", e);
+          calendarContainer.innerHTML = '<div class="empty-state text-center">Live economic calendar feed unavailable.</div>';
+        });
     }
 
     if (chatMessagesContainer) {
       chatMessagesContainer.innerHTML = `
         <div class="chat-msg system">
-          <div class="msg-header"><span class="msg-sender system">System</span><span>Just now</span></div>
-          <div>Advisory chat ready. Non-executing 15m scalping context only.</div>
-        </div>
-        <div class="chat-msg advisory">
-          <div class="msg-header"><span class="msg-sender trader">AdvisoryAgent</span><span>1m ago</span></div>
-          <div>Agent Report stays placeholder-only until a human defines Entrada, Stop Loss, TP1, TP2, Ganancia, and R:R.</div>
-        </div>
-        <div class="chat-msg">
-          <div class="msg-header"><span class="msg-sender trader">DeskNote</span><span>2m ago</span></div>
-          <div>${DEMO_SYMBOL} is local demo data only and does not claim a live feed.</div>
+          <div class="msg-header"><span class="msg-sender system">Hermes</span><span>Just now</span></div>
+          <div>Live advisory chat is wired through /api/chat. Non-executing selectable-timeframe context only.</div>
         </div>
       `;
     }
-  }
-
-  if (chatSendBtn && chatInputField) {
-    const handleSend = () => {
-      const text = chatInputField.value.trim();
-      if (!text) return;
-      
-      const msg = document.createElement("div");
-      msg.className = "chat-msg user";
-      msg.innerHTML = `
-        <div class="msg-header"><span class="msg-sender">You (Trader)</span><span>Just now</span></div>
-        <div>${text}</div>
-      `;
-      chatMessagesContainer.appendChild(msg);
-      chatInputField.value = "";
-      chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
-
-      setTimeout(() => {
-        const reply = document.createElement("div");
-        reply.className = "chat-msg system";
-        const sym = state.activeSymbol;
-        reply.innerHTML = `
-          <div class="msg-header"><span class="msg-sender system">System</span><span>Just now</span></div>
-          <div>Advisory only for ${sym}. The agent does not execute trades, and the Agent Report remains placeholder-only.</div>
-        `;
-        chatMessagesContainer.appendChild(reply);
-        chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
-      }, 1500);
-    };
-
-    chatSendBtn.addEventListener("click", handleSend);
-    chatInputField.addEventListener("keydown", e => {
-      if (e.key === "Enter") handleSend();
-    });
   }
 
   const alertsLogContainer = document.getElementById("alerts-log-container");
@@ -2657,8 +2689,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initChart();
   initTheme();
   initToolbar();
+  initTimeframeSelector();
   initAssetSelector();
-  initLocalDemoSnapshots();
   updateMarketSourceUI(state.activeSymbol);
   updateAdvisoryBubble(state.activeSymbol);
   connectWS();
@@ -2681,8 +2713,89 @@ document.addEventListener("DOMContentLoaded", () => {
 // ── Hermes Chat ────────────────────────────────────────────────────
 const hermesChat = (() => {
   const CHAT_HISTORY_MAX = 20;   // messages kept in memory for context
+  const I18N = {
+    en: {
+      langButton: "ES",
+      langTitle: "Cambiar idioma / Change language",
+      subtitlePrefix: "Signal Agent",
+      advisoryMode: "Advisory only · No execution",
+      macroMode: "Daily macro context · No trading",
+      longLabel: "Long",
+      shortLabel: "Short",
+      entryLabel: "Entry",
+      stopLabel: "Stop",
+      proposalExplain: "Explain signal",
+      proposalTriggers: "Trigger conditions",
+      proposalRisk: "Risk levels",
+      proposalSession: "Session state",
+      introText: "Online. I provide advisory signal context for BTC, ETH, SOL, and daily Gold macro context. Ask me about current signals, position state, or session performance.",
+      placeholder: "Ask about signals, positions, stats…",
+      fabTitle: "Chat with Hermes",
+      expandTitle: "Expand chat",
+      compactTitle: "Compact chat",
+      closeTitle: "Close",
+      sendTitle: "Send",
+      youLabel: "You",
+      systemLabel: "System",
+      noResponse: "No response.",
+      unavailable: "Could not reach Hermes",
+    },
+    es: {
+      langButton: "EN",
+      langTitle: "Change language / Cambiar idioma",
+      subtitlePrefix: "Agente de señales",
+      advisoryMode: "Solo asesoría · Sin ejecución",
+      macroMode: "Contexto macro diario · Sin trading",
+      longLabel: "Largo",
+      shortLabel: "Corto",
+      entryLabel: "Entrada",
+      stopLabel: "Stop",
+      proposalExplain: "Explicar señal",
+      proposalTriggers: "Condiciones",
+      proposalRisk: "Niveles de riesgo",
+      proposalSession: "Estado de sesión",
+      introText: "En línea. Doy contexto asesor para señales de BTC, ETH, SOL y contexto macro diario de oro. Pregúntame por señales actuales, posición o rendimiento de sesión.",
+      placeholder: "Pregunta por señales, posiciones, estadísticas…",
+      fabTitle: "Chatear con Hermes",
+      expandTitle: "Expandir chat",
+      compactTitle: "Compactar chat",
+      closeTitle: "Cerrar",
+      sendTitle: "Enviar",
+      youLabel: "Tú",
+      systemLabel: "Sistema",
+      noResponse: "Sin respuesta.",
+      unavailable: "No se pudo contactar a Hermes",
+    },
+  };
+  const savedLang = localStorage.getItem("hermes_chat_lang_user_set") === "1"
+    ? localStorage.getItem("hermes_chat_lang")
+    : "es";
+  let lang = savedLang === "en" ? "en" : "es";
+  localStorage.setItem("hermes_chat_lang", lang);
   let history = [];              // [{role, content}]
   let pending = false;
+
+  function t(key) {
+    return I18N[lang][key] || I18N.en[key] || key;
+  }
+
+  function applyLanguage(root = document) {
+    root.querySelectorAll("[data-i18n]").forEach(el => {
+      const key = el.getAttribute("data-i18n");
+      el.textContent = t(key);
+    });
+    root.querySelectorAll("[data-i18n-title]").forEach(el => {
+      const key = el.getAttribute("data-i18n-title");
+      el.title = t(key);
+    });
+    const input = document.getElementById("hermes-chat-input");
+    if (input) input.placeholder = t("placeholder");
+    const toggle = document.getElementById("hermes-lang-toggle");
+    if (toggle) {
+      toggle.textContent = t("langButton");
+      toggle.title = t("langTitle");
+    }
+  }
 
   function formatTime() {
     return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -2691,7 +2804,7 @@ const hermesChat = (() => {
   function appendMsg(role, text, container) {
     const div = document.createElement("div");
     div.className = `hermes-msg hermes-msg--${role === "user" ? "user" : "system"}`;
-    const sender = role === "user" ? "You" : "Hermes";
+    const sender = role === "user" ? t("youLabel") : "Hermes";
     div.innerHTML =
       `<span class="hermes-msg-sender">${sender} · ${formatTime()}</span><p>${escapeHtml(text)}</p>`;
     container.appendChild(div);
@@ -2718,24 +2831,24 @@ const hermesChat = (() => {
     messagesEl.scrollTop = messagesEl.scrollHeight;
 
     try {
-      const res = await fetch("/api/chat", {
+      const { data, url } = await fetchJsonWithFallback(`/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message,
           symbol: state.activeSymbol,
+          language: lang,
           history: history.slice(-CHAT_HISTORY_MAX - 1, -1),
         }),
       });
-      const data = await res.json();
       typingEl.hidden = true;
-      const reply = data.reply || "No response.";
+      const reply = data.reply || t("noResponse");
       appendMsg("assistant", reply, messagesEl);
       history.push({ role: "assistant", content: reply });
       if (history.length > CHAT_HISTORY_MAX) history = history.slice(-CHAT_HISTORY_MAX);
     } catch (err) {
       typingEl.hidden = true;
-      appendMsg("assistant", `⚠ Could not reach Hermes: ${err.message}`, messagesEl);
+      appendMsg("assistant", `⚠ ${t("unavailable")}: ${err.message}`, messagesEl);
     } finally {
       pending = false;
     }
@@ -2745,13 +2858,18 @@ const hermesChat = (() => {
     const fab       = document.getElementById("hermes-fab");
     const panel     = document.getElementById("hermes-chat-panel");
     const closeBtn  = document.getElementById("hermes-chat-close");
+    const expandBtn = document.getElementById("hermes-chat-expand");
+    const langBtn   = document.getElementById("hermes-lang-toggle");
     const input     = document.getElementById("hermes-chat-input");
     const sendBtn   = document.getElementById("hermes-chat-send");
     const messagesEl = document.getElementById("hermes-chat-messages");
     const typingEl  = document.getElementById("hermes-typing");
     const subtitleEl = document.getElementById("hermes-context-label");
+    const proposalsEl = document.getElementById("hermes-proposals");
 
     if (!fab || !panel) return;
+    applyLanguage(document);
+    applyLanguage(panel);
 
     // Toggle panel on FAB click
     fab.addEventListener("click", () => {
@@ -2769,24 +2887,115 @@ const hermesChat = (() => {
       });
     }
 
+    if (expandBtn) {
+      expandBtn.addEventListener("click", () => {
+        panel.classList.toggle("full");
+        const isFull = panel.classList.contains("full");
+        expandBtn.textContent = isFull ? "▢" : "□";
+        expandBtn.title = isFull ? t("compactTitle") : t("expandTitle");
+        if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+      });
+    }
+
+    if (langBtn) {
+      langBtn.addEventListener("click", () => {
+        lang = lang === "es" ? "en" : "es";
+        localStorage.setItem("hermes_chat_lang", lang);
+        localStorage.setItem("hermes_chat_lang_user_set", "1");
+        applyLanguage(document);
+        if (subtitleEl) subtitleEl.textContent = `${t("subtitlePrefix")} · ${state.activeSymbol}`;
+        updateSignalContext();
+      });
+    }
+
     // Send on button click or Enter
     const doSend = () => {
       if (!input) return;
       const text = input.value.trim();
       if (!text) return;
       input.value = "";
+      input.style.height = "";
       send(text, messagesEl, typingEl);
     };
 
+    const sendPrompt = prompt => {
+      if (!input || !prompt) return;
+      input.value = prompt;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      doSend();
+    };
+
     if (sendBtn) sendBtn.addEventListener("click", doSend);
-    if (input)   input.addEventListener("keydown", e => { if (e.key === "Enter") doSend(); });
+    if (input) {
+      input.addEventListener("input", () => {
+        input.style.height = "";
+        input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
+      });
+      input.addEventListener("keydown", e => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          doSend();
+        }
+      });
+    }
+
+    if (proposalsEl) {
+      proposalsEl.querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("click", () => sendPrompt(btn.dataset[`prompt${lang === "es" ? "Es" : "En"}`]));
+      });
+    }
+
+    function readText(id) {
+      const el = document.getElementById(id);
+      return el ? (el.textContent || "—").trim() : "—";
+    }
+
+    function pctNumber(text) {
+      const n = Number(String(text || "").replace("%", ""));
+      return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+    }
+
+    function updateSignalContext() {
+      const sig = readText("agent-signal-badge") || "NEUTRAL";
+      const sigEl = document.getElementById("hermes-chat-signal");
+      const modeEl = document.getElementById("hermes-chat-mode");
+      const longEl = document.getElementById("hermes-chat-long");
+      const shortEl = document.getElementById("hermes-chat-short");
+      const longFill = document.getElementById("hermes-chat-long-fill");
+      const shortFill = document.getElementById("hermes-chat-short-fill");
+      const isMacro = isMacroDisplaySymbol(state.activeSymbol);
+      if (sigEl) {
+        sigEl.textContent = sig;
+        sigEl.className = `hermes-signal-badge ${String(sig).toLowerCase()}`;
+      }
+      if (modeEl) modeEl.textContent = isMacro ? t("macroMode") : t("advisoryMode");
+      const longPct = readText("prob-pct-long");
+      const shortPct = readText("prob-pct-short");
+      if (longEl) longEl.textContent = longPct;
+      if (shortEl) shortEl.textContent = shortPct;
+      if (longFill) longFill.style.width = `${pctNumber(longPct)}%`;
+      if (shortFill) shortFill.style.width = `${pctNumber(shortPct)}%`;
+      [
+        ["hermes-chat-entry", "level-entry"],
+        ["hermes-chat-sl", "level-sl"],
+        ["hermes-chat-tp1", "level-tp1"],
+        ["hermes-chat-rr", "level-rr"],
+      ].forEach(([to, from]) => {
+        const el = document.getElementById(to);
+        if (el) el.textContent = isMacro ? "—" : readText(from);
+      });
+    }
+
+    window.__updateHermesChatSignalContext = updateSignalContext;
+    updateSignalContext();
 
     // Keep subtitle in sync with active asset
     const origSwitch = window._hermesAssetSwitchHook;
     // Patch into switchAsset: update subtitle whenever asset changes
     const _origSwitchAsset = window.switchAsset;
     function updateSubtitle(sym) {
-      if (subtitleEl) subtitleEl.textContent = `Signal Agent · ${sym || state.activeSymbol}`;
+      if (subtitleEl) subtitleEl.textContent = `${t("subtitlePrefix")} · ${sym || state.activeSymbol}`;
+      updateSignalContext();
     }
     updateSubtitle(state.activeSymbol);
 
@@ -2829,15 +3038,15 @@ function initAdvisoryChat() {
     newInput.value = "";
     appendChatMsg("user", "You", text);
     try {
-      const res = await fetch("/api/chat", {
+      const { data } = await fetchJsonWithFallback(`/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, symbol: state.activeSymbol, history: [] }),
+        body: JSON.stringify({ message: text, symbol: state.activeSymbol, language: localStorage.getItem("hermes_chat_lang") === "en" ? "en" : "es", history: [] }),
       });
-      const data = await res.json();
-      appendChatMsg("advisory", "Hermes", data.reply || "No response.");
-    } catch {
-      appendChatMsg("system", "System", "Could not reach Hermes. Check predictor connection.");
+      appendChatMsg("advisory", "Hermes", data.reply || (localStorage.getItem("hermes_chat_lang") === "en" ? "No response." : "Sin respuesta."));
+    } catch (err) {
+      const es = localStorage.getItem("hermes_chat_lang") !== "en";
+      appendChatMsg("system", es ? "Sistema" : "System", `${es ? "No se pudo contactar a Hermes" : "Could not reach Hermes"}: ${err.message}`);
     }
   }
 
