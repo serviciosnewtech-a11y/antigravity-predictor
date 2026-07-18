@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Predictor Console</title>
+  <meta name="description" content="Multi-asset 15m scalping dashboard with local demo support for XAU/USD">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+
+  <script>
+    window.onerror = function(msg, url, l, c, e) {
+      const d = document.getElementById("js-debug-console");
+      if (d) { d.style.display = "block"; d.innerHTML += `<div><strong>Error:</strong> ${msg} <em>${url}:${l}:${c}</em></div>`; }
+      return false;
+    };
+  </script>
+</head>
+<body class="dark-mode">
+  <div id="js-debug-console" style="display:none;background:#ff3d00;color:#fff;padding:12px;font-family:monospace;font-size:11px;position:relative;z-index:99999;"></div>
+
+  <div class="app-container">
+
+    <!-- ═══ HEADER ══════════════════════════════════════════════════════════ -->
+    <header class="main-header">
+      <div class="header-left">
+        <span class="logo-icon">▲</span>
+        <h1>Antigravity <span class="logo-sub">Predictor</span></h1>
+        <div class="divider"></div>
+
+        <!-- Asset Selector -->
+        <div class="asset-selector" id="asset-selector">
+          <button class="asset-btn active" id="btn-BTC/USDT" data-symbol="BTC/USDT">
+            <span class="asset-icon btc">₿</span> BTC
+          </button>
+          <button class="asset-btn" id="btn-ETH/USDT" data-symbol="ETH/USDT">
+            <span class="asset-icon eth">Ξ</span> ETH
+          </button>
+          <button class="asset-btn" id="btn-SOL/USDT" data-symbol="SOL/USDT">
+            <span class="asset-icon sol">◎</span> SOL
+          </button>
+          <button class="asset-btn asset-btn-demo" id="btn-XAU/USD" data-symbol="XAU/USD">
+            <span class="asset-icon xau">◌</span> Gold
+          </button>
+        </div>
+
+        <div class="divider"></div>
+        <span class="timeframe-label" id="timeframe-display">15M SCALPING</span>
+        <div class="divider"></div>
+        <div class="ticker-group">
+          <span class="ticker-price" id="live-price">$—</span>
+          <span class="ticker-change" id="price-change">—</span>
+        </div>
+        <span class="market-source-label" id="market-source-label">WS / REST feed</span>
+      </div>
+
+      <div class="header-right">
+        <button id="theme-toggle" class="theme-toggle-btn" title="Toggle Theme">☀️</button>
+        <div class="connection-status" id="connection-status">
+          <span class="status-indicator-dot"></span>
+          <span class="status-text" id="status-text-disp">Connecting…</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═══ BODY ════════════════════════════════════════════════════════════ -->
+    <div class="workspace">
+
+      <!-- LEFT TOOLBAR -->
+      <aside class="toolbar-left" id="toolbar-left" role="toolbar" aria-label="Drawing tools">
+        <!-- 1. Cursor Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn active parent-btn" id="tcat-cursor" title="Cursors" data-category="cursor">
+            <svg viewBox="0 0 18 18"><path d="M3 1l12 7-7 2-2 7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-cursor">
+            <div class="flyout-header">Cursors</div>
+            <div class="flyout-item active" data-tool="cursor" data-shortcut="V">
+              <svg viewBox="0 0 18 18"><path d="M3 1l12 7-7 2-2 7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              <span>Cursor</span><kbd>V</kbd>
+            </div>
+            <div class="flyout-item" data-tool="crosshair" data-shortcut="C">
+              <svg viewBox="0 0 18 18"><line x1="9" y1="2" x2="9" y2="16" stroke="currentColor" stroke-width="1.4"/><line x1="2" y1="9" x2="16" y2="9" stroke="currentColor" stroke-width="1.4"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/></svg>
+              <span>Crosshair</span><kbd>C</kbd>
+            </div>
+            <div class="flyout-item" data-tool="eraser">
+              <svg viewBox="0 0 18 18"><rect x="3" y="6" width="12" height="6" rx="1.5" transform="rotate(-30 9 9)" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+              <span>Eraser</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Trend Lines Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-trendlines" title="Trend Line Tools" data-category="trendlines">
+            <svg viewBox="0 0 18 18"><line x1="3" y1="15" x2="15" y2="3" stroke="currentColor" stroke-width="1.5"/><circle cx="3" cy="15" r="1.5" fill="currentColor"/><circle cx="15" cy="3" r="1.5" fill="currentColor"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-trendlines">
+            <div class="flyout-header">Trend Lines</div>
+            <div class="flyout-item" data-tool="trendline" data-shortcut="T">
+              <svg viewBox="0 0 18 18"><line x1="3" y1="15" x2="15" y2="3" stroke="currentColor" stroke-width="1.5"/><circle cx="3" cy="15" r="1.5" fill="currentColor"/><circle cx="15" cy="3" r="1.5" fill="currentColor"/></svg>
+              <span>Trend Line</span><kbd>T</kbd>
+            </div>
+            <div class="flyout-item" data-tool="ray" data-shortcut="R">
+              <svg viewBox="0 0 18 18"><line x1="3" y1="13" x2="16" y2="5" stroke="currentColor" stroke-width="1.5"/><circle cx="3" cy="13" r="1.5" fill="currentColor"/><polyline points="13,3 16,5 13,7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+              <span>Ray</span><kbd>R</kbd>
+            </div>
+            <div class="flyout-item" data-tool="hline" data-shortcut="H">
+              <svg viewBox="0 0 18 18"><line x1="2" y1="9" x2="16" y2="9" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2,1.5"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/></svg>
+              <span>Horizontal Line</span><kbd>H</kbd>
+            </div>
+            <div class="flyout-item" data-tool="vline" data-shortcut="L">
+              <svg viewBox="0 0 18 18"><line x1="9" y1="2" x2="9" y2="16" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2,1.5"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/></svg>
+              <span>Vertical Line</span><kbd>L</kbd>
+            </div>
+            <div class="flyout-item" data-tool="arrow">
+              <svg viewBox="0 0 18 18"><line x1="3" y1="15" x2="14" y2="4" stroke="currentColor" stroke-width="1.5"/><polygon points="14,4 10,5 13,8" fill="currentColor"/></svg>
+              <span>Arrow</span>
+            </div>
+            <div class="flyout-item" data-tool="channel">
+              <svg viewBox="0 0 18 18"><line x1="3" y1="5" x2="15" y2="5" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="13" x2="15" y2="13" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="9" x2="15" y2="9" stroke="currentColor" stroke-width="1" stroke-dasharray="2,2" opacity=".6"/></svg>
+              <span>Parallel Channel</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Gann & Fibonacci Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-gannfib" title="Gann & Fibonacci Tools" data-category="gannfib">
+            <svg viewBox="0 0 18 18"><line x1="2" y1="4"  x2="16" y2="4"  stroke="currentColor" stroke-width="1.2" opacity=".9"/><line x1="2" y1="7"  x2="16" y2="7"  stroke="currentColor" stroke-width="1"   opacity=".7"/><line x1="2" y1="10" x2="16" y2="10" stroke="currentColor" stroke-width="1"   opacity=".5"/><line x1="2" y1="14" x2="16" y2="14" stroke="currentColor" stroke-width="1.2" opacity=".9"/><line x1="3" y1="4"  x2="3"  y2="14" stroke="currentColor" stroke-width="1.2"/><line x1="15" y1="4" x2="15" y2="14" stroke="currentColor" stroke-width="1.2"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-gannfib">
+            <div class="flyout-header">Gann & Fibonacci</div>
+            <div class="flyout-item" data-tool="fib" data-shortcut="F">
+              <svg viewBox="0 0 18 18"><line x1="2" y1="4"  x2="16" y2="4"  stroke="currentColor" stroke-width="1.2" opacity=".9"/><line x1="2" y1="7"  x2="16" y2="7"  stroke="currentColor" stroke-width="1"   opacity=".7"/><line x1="2" y1="10" x2="16" y2="10" stroke="currentColor" stroke-width="1"   opacity=".5"/><line x1="2" y1="14" x2="16" y2="14" stroke="currentColor" stroke-width="1.2" opacity=".9"/><line x1="3" y1="4"  x2="3"  y2="14" stroke="currentColor" stroke-width="1.2"/></svg>
+              <span>Fib Retracement</span><kbd>F</kbd>
+            </div>
+            <div class="flyout-item" data-tool="fibchannel">
+              <svg viewBox="0 0 18 18"><line x1="2" y1="4" x2="16" y2="4" stroke="currentColor" stroke-width="1"/><line x1="2" y1="8" x2="16" y2="8" stroke="currentColor" stroke-width="1" opacity=".7"/><line x1="2" y1="12" x2="16" y2="12" stroke="currentColor" stroke-width="1" opacity=".4"/></svg>
+              <span>Fib Channel</span>
+            </div>
+            <div class="flyout-item" data-tool="gannfan">
+              <svg viewBox="0 0 18 18"><line x1="2" y1="16" x2="16" y2="16" stroke="currentColor" stroke-width="1.3"/><line x1="2" y1="16" x2="16" y2="2" stroke="currentColor" stroke-width="1.3"/><line x1="2" y1="16" x2="16" y2="7" stroke="currentColor" stroke-width="1" opacity=".7"/><line x1="2" y1="16" x2="16" y2="11" stroke="currentColor" stroke-width="1" opacity=".5"/><line x1="2" y1="16" x2="9" y2="2" stroke="currentColor" stroke-width="1" opacity=".7"/></svg>
+              <span>Gann Fan</span>
+            </div>
+            <div class="flyout-item" data-tool="gannbox">
+              <svg viewBox="0 0 18 18"><rect x="3" y="3" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="3" x2="15" y2="15" stroke="currentColor" stroke-width="1" opacity=".7"/><line x1="3" y1="15" x2="15" y2="3" stroke="currentColor" stroke-width="1" opacity=".7"/><line x1="9" y1="3" x2="9" y2="15" stroke="currentColor" stroke-width="1" stroke-dasharray="2,2" opacity=".5"/></svg>
+              <span>Gann Box</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. Geometric Shapes Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-shapes" title="Geometric Shapes" data-category="shapes">
+            <svg viewBox="0 0 18 18"><rect x="3" y="5" width="12" height="8" fill="none" stroke="currentColor" stroke-width="1.4" rx="1"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-shapes">
+            <div class="flyout-header">Shapes</div>
+            <div class="flyout-item" data-tool="rect" data-shortcut="B">
+              <svg viewBox="0 0 18 18"><rect x="3" y="5" width="12" height="8" fill="none" stroke="currentColor" stroke-width="1.4" rx="1"/></svg>
+              <span>Rectangle</span><kbd>B</kbd>
+            </div>
+            <div class="flyout-item" data-tool="circle">
+              <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+              <span>Circle</span>
+            </div>
+            <div class="flyout-item" data-tool="triangle">
+              <svg viewBox="0 0 18 18"><polygon points="9,3 16,15 2,15" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+              <span>Triangle</span>
+            </div>
+            <div class="flyout-item" data-tool="brush">
+              <svg viewBox="0 0 18 18"><path d="M3 14 C6 14 5 7 9 7 C13 7 12 14 15 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <span>Brush</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. Annotation Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-annotation" title="Annotation Tools" data-category="annotation">
+            <svg viewBox="0 0 18 18"><text x="3" y="14" font-size="13" fill="currentColor" font-family="serif" font-weight="bold">A</text></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-annotation">
+            <div class="flyout-header">Annotations</div>
+            <div class="flyout-item" data-tool="text" data-shortcut="A">
+              <svg viewBox="0 0 18 18"><text x="3" y="14" font-size="13" fill="currentColor" font-family="serif" font-weight="bold">A</text></svg>
+              <span>Text Label</span><kbd>A</kbd>
+            </div>
+            <div class="flyout-item" data-tool="callout">
+              <svg viewBox="0 0 18 18"><rect x="2" y="3" width="14" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><polyline points="4,12 4,15 7,12" fill="currentColor" stroke="none"/></svg>
+              <span>Callout</span>
+            </div>
+            <div class="flyout-item" data-tool="pricelabel">
+              <svg viewBox="0 0 18 18"><rect x="3" y="5" width="12" height="8" rx="1" fill="currentColor"/><text x="9" y="11" font-size="6" fill="#000" text-anchor="middle" font-weight="bold">$</text></svg>
+              <span>Price Label</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. Prediction & Measurement Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-prediction" title="Prediction & Measurement" data-category="prediction">
+            <svg viewBox="0 0 18 18"><line x1="4" y1="5"  x2="14" y2="5"  stroke="currentColor" stroke-width="1.3"/><line x1="4" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.3"/><line x1="9" y1="5"  x2="9"  y2="13" stroke="currentColor" stroke-width="1.3"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-prediction">
+            <div class="flyout-header">Measurement</div>
+            <div class="flyout-item" data-tool="measure" data-shortcut="M">
+              <svg viewBox="0 0 18 18"><line x1="4" y1="5"  x2="14" y2="5"  stroke="currentColor" stroke-width="1.3"/><line x1="4" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.3"/><line x1="9" y1="5"  x2="9"  y2="13" stroke="currentColor" stroke-width="1.3"/></svg>
+              <span>Price Measure</span><kbd>M</kbd>
+            </div>
+            <div class="flyout-item" data-tool="longposition">
+              <svg viewBox="0 0 18 18"><rect x="3" y="3" width="12" height="6" fill="rgba(0,230,118,0.25)" stroke="var(--color-green)" stroke-width="1"/><rect x="3" y="9" width="12" height="6" fill="rgba(255,61,0,0.25)" stroke="var(--color-red)" stroke-width="1"/></svg>
+              <span>Long Position</span>
+            </div>
+            <div class="flyout-item" data-tool="shortposition">
+              <svg viewBox="0 0 18 18"><rect x="3" y="3" width="12" height="6" fill="rgba(255,61,0,0.25)" stroke="var(--color-red)" stroke-width="1"/><rect x="3" y="9" width="12" height="6" fill="rgba(0,230,118,0.25)" stroke="var(--color-green)" stroke-width="1"/></svg>
+              <span>Short Position</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7. Icons Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-icons" title="Icons & Stickers" data-category="icons">
+            <svg viewBox="0 0 18 18"><circle cx="9" cy="8" r="4.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="0.6" fill="currentColor"/><circle cx="11" cy="7" r="0.6" fill="currentColor"/><path d="M6.5 10 C7 11.5 11 11.5 11.5 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-icons">
+            <div class="flyout-header">Stickers</div>
+            <div class="flyout-item" data-tool="icon-star">
+              <span style="font-size:1.1rem; margin-right: 8px;">⭐</span>
+              <span>Star Icon</span>
+            </div>
+            <div class="flyout-item" data-tool="icon-heart">
+              <span style="font-size:1.1rem; margin-right: 8px;">❤️</span>
+              <span>Heart Icon</span>
+            </div>
+            <div class="flyout-item" data-tool="icon-thumbsup">
+              <span style="font-size:1.1rem; margin-right: 8px;">👍</span>
+              <span>Thumbs Up</span>
+            </div>
+            <div class="flyout-item" data-tool="icon-arrowup">
+              <span style="font-size:1.1rem; margin-right: 8px;">⬆️</span>
+              <span>Arrow Up</span>
+            </div>
+            <div class="flyout-item" data-tool="icon-arrowdown">
+              <span style="font-size:1.1rem; margin-right: 8px;">⬇️</span>
+              <span>Arrow Down</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="toolbar-sep"></div>
+
+        <!-- 8. Magnet Mode Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-magnet" title="Magnet Mode" data-category="magnet" aria-pressed="false">
+            <svg viewBox="0 0 18 18"><path d="M4 5 A5 5 0 0 1 14 5" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="4" y1="5" x2="4" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="5" x2="14" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="2" y1="12" x2="6"  y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="12" x2="16" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-magnet">
+            <div class="flyout-header">Magnet Mode</div>
+            <div class="flyout-item" data-tool="magnet-weak">
+              <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".5"/><circle cx="9" cy="9" r="2.5" fill="currentColor"/></svg>
+              <span>Weak Magnet</span>
+            </div>
+            <div class="flyout-item" data-tool="magnet-strong">
+              <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="9" cy="9" r="3.5" fill="currentColor"/></svg>
+              <span>Strong Magnet</span>
+            </div>
+            <div class="flyout-item" data-tool="magnet-off">
+              <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2,2"/></svg>
+              <span>Magnet Off</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 9. Drawing Mode Lock (Stay in Drawing Mode) -->
+        <button class="tool-btn" id="tool-lockmode" title="Stay in Drawing Mode">
+          <svg viewBox="0 0 18 18"><path d="M4.5,8.5 V6 A4.5,4.5 0 0,1 13.5,6 V8.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="2.5" y="8.5" width="13" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="9" cy="12" r="1" fill="currentColor"/></svg>
+        </button>
+
+        <!-- 10. Lock All Drawing Tools -->
+        <button class="tool-btn" id="tool-lockdrawings" title="Lock All Drawings">
+          <svg viewBox="0 0 18 18"><rect x="3.5" y="7.5" width="11" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6,7.5 V5.5 A3,3 0 0,1 12,5.5 V7.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="9" cy="11.5" r="1" fill="currentColor"/></svg>
+        </button>
+
+        <!-- 11. Hide / Eye Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn" id="tcat-hide" title="Hide Drawings" data-category="hide">
+            <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.5,9 C1.5,9 4.5,3.5 9,3.5 C13.5,3.5 16.5,9 16.5,9 C16.5,9 13.5,14.5 9,14.5 C4.5,14.5 1.5,9 1.5,9 Z" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-hide">
+            <div class="flyout-header">Visibility</div>
+            <div class="flyout-item" data-action="hide-drawings">
+              <span>Hide Drawings</span>
+            </div>
+            <div class="flyout-item" data-action="hide-indicators">
+              <span>Hide Indicators</span>
+            </div>
+            <div class="flyout-item" data-action="hide-all">
+              <span>Hide All</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 12. Remove / Trash Category -->
+        <div class="tool-category-wrapper">
+          <button class="tool-btn parent-btn danger" id="tcat-trash" title="Remove Drawings" data-category="trash">
+            <svg viewBox="0 0 18 18"><path d="M3 4.5 L15 4.5 M5.5 4.5 L5.5 3 A1.5 1.5 0 0 1 7 1.5 L11 1.5 A1.5 1.5 0 0 1 12.5 3 L12.5 4.5 M6.5 7 L6.5 13.5 M11.5 7 L11.5 13.5 M4 4.5 L5 14 A1.5 1.5 0 0 0 6.5 15.5 L11.5 15.5 A1.5 1.5 0 0 0 13 14 L14 4.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+            <span class="sub-arrow"></span>
+          </button>
+          <div class="flyout-menu" id="flyout-trash">
+            <div class="flyout-header">Remove</div>
+            <div class="flyout-item text-red" data-action="clear-drawings">
+              <span>Remove Drawings</span>
+            </div>
+            <div class="flyout-item text-red" data-action="clear-indicators">
+              <span>Remove Indicators</span>
+            </div>
+            <div class="flyout-item text-red" data-action="clear-both">
+              <span>Remove Both</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- MAIN CONTENT -->
+      <main class="dashboard-grid">
+
+        <!-- Chart Column -->
+        <section class="grid-left-pane">
+          <div class="panel chart-panel">
+            <div class="panel-header">
+              <div class="panel-title-group">
+                <h2 id="chart-title">BTC/USDT · 15M Scalping</h2>
+              </div>
+              <div class="chart-legend">
+                <span class="legend-item"><span class="legend-dot green"></span>Buy</span>
+                <span class="legend-item"><span class="legend-dot orange"></span>Sell</span>
+                <span class="legend-item"><span class="legend-dot red"></span>Exit</span>
+                <!-- Drawing tooltip -->
+                <span class="drawing-hint" id="drawing-hint"></span>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="tv-chart-container" class="chart-container-wrapper"></div>
+              <!-- Drawing overlay canvas -->
+              <canvas id="drawing-canvas" class="drawing-canvas"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right Panel + Tool Rail -->
+        <div class="right-column">
+        <section class="grid-right-pane">
+
+          <!-- 1. Watchlist Widget Panel (Primary / Default) -->
+          <div class="widget-panel" id="widget-watchlist">
+            <!-- Asset Watchlist Table -->
+            <div class="panel watchlist-panel">
+              <div class="panel-header">
+                <h2>Watchlist</h2>
+              </div>
+              <div class="panel-body" style="padding: 10px;">
+                <table class="data-table watchlist-table" style="width: 100%; border-collapse: collapse; font-size: 0.8rem;">
+                  <thead>
+                    <tr>
+                      <th scope="col" style="text-align:left; padding: 6px 8px;">Symbol</th>
+                      <th scope="col" style="text-align:right; padding: 6px 8px;">Last</th>
+                      <th scope="col" style="text-align:right; padding: 6px 8px;">Chg%</th>
+                    </tr>
+                  </thead>
+                  <tbody id="watchlist-body">
+                    <tr class="watchlist-row" data-symbol="BTC/USDT" id="wl-row-BTC-USDT" style="cursor: pointer; transition: background 0.15s;">
+                      <td style="padding: 8px;"><span class="asset-icon btc" style="color: #f5a623; margin-right: 6px; font-weight: bold;">₿</span> BTCUSD</td>
+                      <td class="wl-price text-right" id="wl-price-BTC-USDT" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                      <td class="wl-change text-right" id="wl-change-BTC-USDT" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                    </tr>
+                    <tr class="watchlist-row" data-symbol="ETH/USDT" id="wl-row-ETH-USDT" style="cursor: pointer; transition: background 0.15s;">
+                      <td style="padding: 8px;"><span class="asset-icon eth" style="color: #a462f7; margin-right: 6px; font-weight: bold;">Ξ</span> ETHUSD</td>
+                      <td class="wl-price text-right" id="wl-price-ETH-USDT" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                      <td class="wl-change text-right" id="wl-change-ETH-USDT" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                    </tr>
+                    <tr class="watchlist-row" data-symbol="SOL/USDT" id="wl-row-SOL-USDT" style="cursor: pointer; transition: background 0.15s;">
+                      <td style="padding: 8px;"><span class="asset-icon sol" style="color: #00e5ff; margin-right: 6px; font-weight: bold;">◎</span> SOLUSD</td>
+                      <td class="wl-price text-right" id="wl-price-SOL-USDT" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                      <td class="wl-change text-right" id="wl-change-SOL-USDT" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                    </tr>
+                    <tr class="watchlist-row" data-symbol="XAU/USD" id="wl-row-XAU-USD" style="cursor: pointer; transition: background 0.15s;">
+                      <td style="padding: 8px;"><span class="asset-icon xau" style="color: var(--color-gold); margin-right: 6px; font-weight: bold;">◌</span> XAUUSD <span class="demo-chip">demo</span></td>
+                      <td class="wl-price text-right" id="wl-price-XAU-USD" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                      <td class="wl-change text-right" id="wl-change-XAU-USD" style="text-align:right; padding: 8px; font-family: monospace;">—</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Agent Report Panel -->
+            <div class="panel engine-panel">
+              <div class="panel-header">
+                <h2>Agent Report</h2>
+                <span class="asset-tag" id="engine-asset-tag">BTC/USDT</span>
+              </div>
+              <div class="panel-body">
+                <div class="agent-report-card">
+
+                  <!-- Signal + Confidence row -->
+                  <div class="agent-signal-row">
+                    <div class="agent-signal-badge neutral" id="agent-signal-badge">NEUTRAL</div>
+                    <div class="agent-confidence-badge" id="agent-confidence-badge">—</div>
+                    <span class="agent-report-status">Advisory only · No execution</span>
+                  </div>
+
+                  <!-- Probability bars -->
+                  <div class="prob-bars-wrap">
+                    <div class="prob-bar-row">
+                      <span class="prob-label">Long</span>
+                      <div class="prob-track">
+                        <div class="prob-fill long-fill" id="prob-fill-long" style="width:0%"></div>
+                      </div>
+                      <span class="prob-pct" id="prob-pct-long">0.0%</span>
+                    </div>
+                    <div class="prob-bar-row">
+                      <span class="prob-label">Short</span>
+                      <div class="prob-track">
+                        <div class="prob-fill short-fill" id="prob-fill-short" style="width:0%"></div>
+                      </div>
+                      <span class="prob-pct" id="prob-pct-short">0.0%</span>
+                    </div>
+                  </div>
+
+                  <!-- Price levels (computed from ATR when signal active) -->
+                  <div class="agent-report-grid" id="price-levels-grid">
+                    <div class="agent-report-field"><span class="stat-label">Entry</span><span class="stat-value text-muted" id="level-entry">—</span></div>
+                    <div class="agent-report-field"><span class="stat-label">Stop Loss</span><span class="stat-value text-muted" id="level-sl">—</span></div>
+                    <div class="agent-report-field"><span class="stat-label">TP1 (1.5×ATR)</span><span class="stat-value text-muted" id="level-tp1">—</span></div>
+                    <div class="agent-report-field"><span class="stat-label">TP2 (2.5×ATR)</span><span class="stat-value text-muted" id="level-tp2">—</span></div>
+                    <div class="agent-report-field"><span class="stat-label">ATR</span><span class="stat-value text-muted" id="level-atr">—</span></div>
+                    <div class="agent-report-field"><span class="stat-label">R:R (TP1)</span><span class="stat-value text-muted" id="level-rr">—</span></div>
+                  </div>
+
+                  <!-- Enriched context (from Hermes signal agent) -->
+                  <div class="enriched-context" id="enriched-context-wrap" style="display:none">
+                    <div class="enriched-section">
+                      <span class="enriched-label">Model Context</span>
+                      <p class="enriched-text" id="enriched-model-context">—</p>
+                    </div>
+                    <div class="enriched-section">
+                      <span class="enriched-label">News Summary</span>
+                      <p class="enriched-text" id="enriched-news-summary">—</p>
+                    </div>
+                    <div class="enriched-section">
+                      <span class="enriched-label">Key Risks</span>
+                      <p class="enriched-text" id="enriched-key-risks">—</p>
+                    </div>
+                    <div class="enriched-section">
+                      <span class="enriched-label">Analyst Note</span>
+                      <p class="enriched-text" id="enriched-analyst-note">—</p>
+                    </div>
+                    <div class="enriched-footer">
+                      <span class="enriched-label">Signal agent</span>
+                      <span class="enriched-timestamp" id="enriched-timestamp">—</span>
+                    </div>
+                  </div>
+
+                  <p class="agent-report-note" id="agent-report-note">Waiting for model signal…</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Existing Scalping Stats Panel -->
+            <div class="panel stats-panel">
+              <div class="panel-header"><h2>15m Scalping Estimations</h2></div>
+              <div class="panel-body">
+                <div class="metrics-grid">
+                  <div class="metric-card">
+                    <span class="metric-label">Net Profit</span>
+                    <span class="metric-value" id="net-profit-disp">0.00 USDT</span>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">Win Rate</span>
+                    <span class="metric-value" id="win-rate-disp">0.0%</span>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">Total Trades</span>
+                    <span class="metric-value" id="total-trades-disp">0</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Existing Trade Log Panel -->
+            <div class="panel logs-panel">
+              <div class="panel-header"><h2>Trade Estimations</h2></div>
+              <div class="panel-body scrollable">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Time</th>
+                      <th scope="col">Type</th>
+                      <th scope="col">Entry</th>
+                      <th scope="col">Exit</th>
+                      <th scope="col">PnL</th>
+                      <th scope="col">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody id="trade-history-body">
+                    <tr><td colspan="6" class="text-center empty-state">No trades yet. Waiting for signals…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Alerts Widget Panel -->
+          <div class="widget-panel" id="widget-alerts" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Alert Log</h2></div>
+              <div class="panel-body scrollable" style="padding:10px; max-height: calc(100vh - 120px);">
+                <div class="alerts-list" id="alerts-log-container" style="display:flex; flex-direction:column; gap:8px;">
+                  <div class="empty-state text-center">No alerts triggered yet.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. News Widget Panel -->
+          <div class="widget-panel" id="widget-news" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Market News</h2></div>
+              <div class="panel-body scrollable" style="padding:10px; max-height: calc(100vh - 120px);">
+                <div class="news-list" id="news-container" style="display:flex; flex-direction:column; gap:12px;">
+                  <!-- dynamically updated headlines -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Data Window Widget Panel (table version) -->
+          <div class="widget-panel" id="widget-datawindow" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Data Window</h2></div>
+              <div class="panel-body" style="padding:10px;">
+                <table class="data-table dw-panel-table" style="width:100%; border-collapse: collapse; font-size:0.8rem;">
+                  <tbody>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Time</td><td id="dw-p-time" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">—</td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Open</td><td id="dw-p-open" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">—</td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">High</td><td id="dw-p-high" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">—</td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Low</td><td id="dw-p-low" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">—</td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Close</td><td id="dw-p-close" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">—</td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Volume</td><td id="dw-p-vol" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">—</td></tr>
+                    <tr class="separator-row"><td colspan="2" style="border-bottom:1px solid var(--border-color);height:8px;padding:0;"></td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Mode</td><td id="dw-p-mode" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">15m scalping</td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Source</td><td id="dw-p-source" style="padding:8px 4px; text-align:right; font-family:var(--font-mono);">WS / REST feed</td></tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding:8px 4px; color:var(--color-text-muted);">Advisory</td><td id="dw-p-advisory" style="padding:8px 4px; text-align:right; font-weight:600;">Placeholder only</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 5. Hotlists Widget Panel -->
+          <div class="widget-panel" id="widget-hotlists" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Hotlists</h2></div>
+              <div class="panel-body scrollable" style="padding:10px; max-height: calc(100vh - 120px);">
+                <div class="hotlist-section">
+                  <h4 style="margin:5px 0; font-size:0.75rem; color:var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.5px;">VOLUME LEADERS</h4>
+                  <table class="data-table" style="font-size:0.75rem; width: 100%;">
+                    <thead>
+                      <tr style="border-bottom: 1px solid var(--border-color);"><th style="padding: 4px;">Symbol</th><th style="text-align:right; padding: 4px;">Last Price</th><th style="text-align:right; padding: 4px;">24h Vol</th></tr>
+                    </thead>
+                    <tbody id="hotlist-vol-body">
+                      <!-- dynamic -->
+                    </tbody>
+                  </table>
+                </div>
+                <div class="hotlist-section" style="margin-top:20px;">
+                  <h4 style="margin:5px 0; font-size:0.75rem; color:var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.5px;">TOP GAINERS</h4>
+                  <table class="data-table" style="font-size:0.75rem; width: 100%;">
+                    <thead>
+                      <tr style="border-bottom: 1px solid var(--border-color);"><th style="padding: 4px;">Symbol</th><th style="text-align:right; padding: 4px;">Change %</th><th style="text-align:right; padding: 4px;">Last Price</th></tr>
+                    </thead>
+                    <tbody id="hotlist-gainers-body">
+                      <!-- dynamic -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 6. Economic Calendar Widget Panel -->
+          <div class="widget-panel" id="widget-calendar" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Economic Calendar</h2></div>
+              <div class="panel-body scrollable" style="padding:10px; max-height: calc(100vh - 120px);">
+                <div class="calendar-list" id="calendar-events-container" style="display:flex; flex-direction:column; gap:12px;">
+                  <!-- list of calendar events -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 7. My Ideas Notepad Widget Panel -->
+          <div class="widget-panel" id="widget-ideas" hidden>
+            <div class="panel" style="height:100%; border-bottom: none;">
+              <div class="panel-header"><h2>My Trading Ideas</h2></div>
+              <div class="panel-body" style="padding:10px; display:flex; flex-direction:column; gap:10px; height: calc(100vh - 140px);">
+                <textarea id="ideas-notepad" placeholder="Write down notes, strategy tweaks, and trade plans..." style="flex:1; background:var(--bg-card); color:var(--color-text-main); border:1px solid var(--border-color); border-radius:var(--radius); padding:10px; font-family:inherit; font-size:0.8rem; resize:none; outline:none; min-height:280px;"></textarea>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span id="notepad-status" style="font-size:0.65rem; color:var(--color-text-muted);">Saved locally.</span>
+                  <button id="btn-clear-notepad" class="asset-btn" style="padding:4px 8px; font-size:0.7rem; background:rgba(255,61,0,0.1); color:var(--color-red); border-color:rgba(255,61,0,0.2);">Clear</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 8. Public Chats Widget Panel (Model Diagnostics / Live Room) -->
+          <div class="widget-panel" id="widget-chats" hidden>
+            <div class="panel" style="height:100%; border-bottom: none; display:flex; flex-direction:column;">
+              <div class="panel-header"><h2>Advisory Chat</h2></div>
+              <div class="panel-body scrollable" id="chat-messages-container" style="flex:1; padding:10px; display:flex; flex-direction:column; gap:8px; height: calc(100vh - 200px); overflow-y: auto;">
+                <!-- advisory messages only -->
+              </div>
+              <div class="chat-input-bar" style="padding:8px; border-top:1px solid var(--border-color); display:flex; gap:6px; background:var(--bg-toolbar);">
+                <input type="text" id="chat-input-field" placeholder="Ask for advisory context only..." style="flex:1; background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:6px 10px; color:var(--color-text-main); font-size:0.75rem; outline:none;">
+                <button id="btn-send-chat" class="asset-btn active" style="padding:6px 12px; font-size:0.75rem;">Send</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 9. Ideas Stream Widget Panel -->
+          <div class="widget-panel" id="widget-ideasstream" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Ideas Stream</h2></div>
+              <div class="panel-body scrollable" style="padding:10px; max-height: calc(100vh - 120px);">
+                <div class="stream-ideas-list" id="stream-ideas-container" style="display:flex; flex-direction:column; gap:12px;">
+                  <!-- backtests / strategies stream -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 10. Streams Widget Panel -->
+          <div class="widget-panel" id="widget-streams" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Live Webcast</h2></div>
+              <div class="panel-body" style="padding:12px; text-align:center;">
+                <div class="stream-video-sim" style="width:100%; aspect-ratio:16/9; background:#000; border:1px solid var(--border-color); border-radius:var(--radius); display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; margin-bottom:12px;">
+                  <div class="pulse-indicator" style="position:absolute; top:10px; left:10px; display:flex; align-items:center; gap:6px; background:rgba(0,0,0,0.6); padding:3px 6px; border-radius:3px;">
+                    <span style="width:6px; height:6px; border-radius:50%; background:var(--color-red); display:block; animation:pulse-dot 1.5s infinite;"></span>
+                    <span style="font-size:0.6rem; color:#fff; font-weight:600;">LIVE STREAM</span>
+                  </div>
+                  <canvas id="stream-canvas" style="width:100%; height:100%; background: #080a0f; pointer-events: none;"></canvas>
+                </div>
+                <h4 style="margin:5px 0; font-size:0.8rem; text-align:left;">Antigravity Strategy Broadcaster</h4>
+                <p style="font-size:0.68rem; color:var(--color-text-muted); text-align:left; line-height:1.3; margin-top:4px;">Broadcasting real-time model evaluation and strategy backtests for BTC, ETH and SOL perpetuations.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 11. Notifications Widget Panel -->
+          <div class="widget-panel" id="widget-notifications" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Notifications</h2></div>
+              <div class="panel-body scrollable" style="padding:10px; max-height: calc(100vh - 120px);">
+                <div class="notifications-list" id="notifications-container" style="display:flex; flex-direction:column; gap:10px;">
+                  <!-- notifications -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 12. Order Panel (Simulated Trading) -->
+          <div class="widget-panel" id="widget-order" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Simulated Trading</h2></div>
+              <div class="panel-body scrollable" style="padding:12px; display:flex; flex-direction:column; gap:12px; max-height: calc(100vh - 120px);">
+                <div class="order-form-group" style="background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius);">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-size:0.75rem; color:var(--color-text-muted);">Ticker</span>
+                    <span class="asset-tag" id="order-asset-tag" style="background: var(--border-color); color: var(--color-text-main); font-weight: bold; font-size: 0.72rem; padding: 2px 6px; border-radius: 4px;">BTC/USDT</span>
+                  </div>
+                  <div class="order-side-btns" style="display:flex; gap:6px; margin-bottom:10px;">
+                    <button id="order-buy-btn" class="asset-btn active" style="flex:1; background:rgba(0,230,118,0.1); color:var(--color-green); border-color:var(--color-green); font-weight:600; padding:8px 0; border-radius: var(--radius); cursor: pointer; transition: all 0.2s;">BUY / LONG</button>
+                    <button id="order-sell-btn" class="asset-btn" style="flex:1; background:transparent; color:var(--color-text-muted); border-color:var(--border-color); font-weight:600; padding:8px 0; border-radius: var(--radius); cursor: pointer; transition: all 0.2s;">SELL / SHORT</button>
+                  </div>
+                  <div class="order-input-row" style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px;">
+                    <label style="font-size:0.65rem; color:var(--color-text-muted); text-transform:uppercase;">Order Type</label>
+                    <select id="order-type-select" style="background:var(--bg-card); color:var(--color-text-main); border:1px solid var(--border-color); border-radius:var(--radius); padding:6px; font-size:0.75rem; outline:none; cursor: pointer;">
+                      <option value="market">Market</option>
+                      <option value="limit">Limit</option>
+                    </select>
+                  </div>
+                  <div class="order-input-row" id="limit-price-row" style="display:none; flex-direction:column; gap:4px; margin-bottom:8px;">
+                    <label style="font-size:0.65rem; color:var(--color-text-muted); text-transform:uppercase;">Limit Price (USDT)</label>
+                    <input type="number" id="order-price-input" step="any" style="background:var(--bg-card); color:var(--color-text-main); border:1px solid var(--border-color); border-radius:var(--radius); padding:6px; font-size:0.75rem; outline:none; font-family:var(--font-mono);">
+                  </div>
+                  <div class="order-input-row" style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
+                    <label style="font-size:0.65rem; color:var(--color-text-muted); text-transform:uppercase;">Quantity</label>
+                    <div style="display:flex; align-items:center; position:relative;">
+                      <input type="number" id="order-qty-input" value="0.1" step="any" style="width:100%; background:var(--bg-card); color:var(--color-text-main); border:1px solid var(--border-color); border-radius:var(--radius); padding:6px 40px 6px 8px; font-size:0.75rem; outline:none; font-family:var(--font-mono);">
+                      <span id="order-qty-unit" style="position:absolute; right:10px; font-size:0.65rem; color:var(--color-text-muted); font-weight:600;">BTC</span>
+                    </div>
+                  </div>
+                  <button id="btn-submit-order" class="asset-btn active" style="width:100%; font-weight:600; padding:10px 0; background:var(--color-green); color:#0f141c; border-color:var(--color-green); box-shadow:0 0 10px rgba(0,230,118,0.2); border-radius: var(--radius); cursor: pointer; transition: all 0.2s;">Place Simulated Order</button>
+                </div>
+
+                <div class="divider" style="margin:5px 0; border-top: 1px solid var(--border-color);"></div>
+
+                <div class="portfolio-summary" style="background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 12px; border-radius: var(--radius);">
+                  <h4 style="margin:0 0 8px 0; font-size:0.75rem; color:var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.5px;">BALANCE & POSITIONS</h4>
+                  <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:6px;">
+                    <span>Available Balance:</span>
+                    <span id="portfolio-balance-disp" style="font-family:var(--font-mono); font-weight:600;">10,000.00 USDT</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:6px;">
+                    <span>Active Manual Position:</span>
+                    <span id="manual-position-disp" style="font-family:var(--font-mono); font-weight:600; color:var(--color-text-muted);">None</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:10px;">
+                    <span>Unrealized P&L:</span>
+                    <span id="manual-pnl-disp" style="font-family:var(--font-mono); font-weight:600;">0.00 USDT</span>
+                  </div>
+                  <button id="btn-close-position" class="asset-btn" style="width:100%; font-size:0.75rem; padding:8px 0; border-color:rgba(255,61,0,0.3); color: var(--color-red); background: rgba(255,61,0,0.05); cursor: pointer; display:none; border-radius: var(--radius);">Close Active Position</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 13. DOM (Depth of Market) Widget Panel -->
+          <div class="widget-panel" id="widget-dom" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header"><h2>Depth of Market (DOM)</h2></div>
+              <div class="panel-body" style="padding:10px;">
+                <div class="dom-wrapper" style="display:flex; flex-direction:column; font-size:0.72rem; border: 1px solid var(--border-color); border-radius: var(--radius); padding: 8px; background: rgba(255,255,255,0.01);">
+                  <!-- Headers -->
+                  <div class="dom-header-row" style="display:flex; color:var(--color-text-muted); font-weight:600; border-bottom:1px solid var(--border-color); padding-bottom:6px; margin-bottom:6px; text-align:right;">
+                    <div style="width:35%; text-align:left;">Size (Qty)</div>
+                    <div style="width:30%;">Price</div>
+                    <div style="width:35%;">Depth</div>
+                  </div>
+                  <!-- Ask Levels (selling, red depth) -->
+                  <div id="dom-asks-container" style="display:flex; flex-direction:column-reverse; gap:2px; max-height:130px; overflow:hidden;">
+                    <!-- bids/asks levels generated here -->
+                  </div>
+                  <!-- Mid Price Spread Row -->
+                  <div class="dom-mid-row" style="display:flex; align-items:center; justify-content:space-between; background:rgba(255,255,255,0.02); border-top:1px solid var(--border-color); border-bottom:1px solid var(--border-color); padding:6px 8px; margin:6px 0; font-weight:600; font-family:var(--font-mono); border-radius: 4px;">
+                    <span id="dom-mid-price" style="color: var(--color-text-main); font-size: 0.8rem;">—</span>
+                    <span id="dom-spread" style="font-size:0.65rem; color:var(--color-text-muted);">Spread: —</span>
+                  </div>
+                  <!-- Bid Levels (buying, green depth) -->
+                  <div id="dom-bids-container" style="display:flex; flex-direction:column; gap:2px; max-height:130px; overflow:hidden;">
+                    <!-- bids levels -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 14. Object Tree Widget Panel -->
+          <div class="widget-panel" id="widget-objecttree" hidden>
+            <div class="panel" style="border-bottom: none;">
+              <div class="panel-header">
+                <h2>Object Tree</h2>
+                <button id="btn-clear-drawings-tree" class="asset-btn" style="padding:2px 6px; font-size:0.65rem; border-color:rgba(255,61,0,0.2); color:var(--color-red); background: rgba(255,61,0,0.05); cursor: pointer; border-radius: 4px;">Clear All</button>
+              </div>
+              <div class="panel-body scrollable" style="padding:10px; max-height: calc(100vh - 120px);">
+                <div class="object-tree-list" id="object-tree-container" style="display:flex; flex-direction:column; gap:6px;">
+                  <div class="empty-state text-center">No drawings on the chart.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </section>
+
+          <!-- RIGHT TOOLBAR RAIL — mirrors TradingView right-rail -->
+          <aside class="toolbar-right" role="toolbar" aria-label="Panel tools">
+
+            <!-- TOP GROUP -->
+            <div class="toolbar-group">
+              <!-- 1. Watchlist -->
+              <button class="rtool-btn active" id="rtool-watchlist" title="Watchlist & Details">
+                <svg viewBox="0 0 18 18"><rect x="2" y="3" width="14" height="2" rx="0.3" fill="currentColor"/><rect x="2" y="7" width="14" height="2" rx="0.3" fill="currentColor" opacity=".7"/><rect x="2" y="11" width="14" height="2" rx="0.3" fill="currentColor" opacity=".4"/></svg>
+              </button>
+              <!-- 2. Alerts -->
+              <button class="rtool-btn" id="rtool-alerts" title="Alerts Log">
+                <svg viewBox="0 0 18 18"><circle cx="9" cy="9.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.3"/><polyline points="9,6.5 9,9.5 11.5,11" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M5 3 L3 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M13 3 L15 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+              </button>
+              <!-- 3. News -->
+              <button class="rtool-btn" id="rtool-news" title="Market News">
+                <svg viewBox="0 0 18 18"><rect x="2" y="3" width="14" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="5" y1="6" x2="13" y2="6" stroke="currentColor" stroke-width="1.3"/><line x1="5" y1="9" x2="13" y2="9" stroke="currentColor" stroke-width="1.1" opacity=".7"/><line x1="5" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.1" opacity=".5"/></svg>
+              </button>
+              <!-- 4. Data Window -->
+              <button class="rtool-btn" id="rtool-datawindow" title="Data Window">
+                <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="9" cy="9" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="9" y1="1" x2="9" y2="3.5" stroke="currentColor" stroke-width="1.3"/><line x1="9" y1="14.5" x2="9" y2="17" stroke="currentColor" stroke-width="1.3"/><line x1="1" y1="9" x2="3.5" y2="9" stroke="currentColor" stroke-width="1.3"/><line x1="14.5" y1="9" x2="17" y2="9" stroke="currentColor" stroke-width="1.3"/></svg>
+              </button>
+              <!-- 5. Hotlists -->
+              <button class="rtool-btn" id="rtool-hotlists" title="Hotlists (Gainers/Volume)">
+                <svg viewBox="0 0 18 18"><path d="M3 15 Q6 8 8 10 T15 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="15" cy="3" r="1.5" fill="currentColor"/><path d="M3 15 L15 15" stroke="currentColor" stroke-width="1.2" opacity=".4"/><polyline points="11,3 15,3 15,7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              </button>
+              <!-- 6. Economic Calendar -->
+              <button class="rtool-btn" id="rtool-calendar" title="Economic Calendar">
+                <svg viewBox="0 0 18 18"><rect x="2" y="3" width="14" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="2" y1="7" x2="16" y2="7" stroke="currentColor" stroke-width="1.1"/><line x1="5" y1="1.5" x2="5" y2="4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="13" y1="1.5" x2="13" y2="4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="5" y="9" width="1.5" height="1.5" fill="currentColor" opacity=".6"/><rect x="8.2" y="9" width="1.5" height="1.5" fill="currentColor" opacity=".6"/><rect x="11.5" y="9" width="1.5" height="1.5" fill="currentColor" opacity=".6"/><rect x="5" y="11.5" width="1.5" height="1.5" fill="currentColor" opacity=".6"/><rect x="8.2" y="11.5" width="1.5" height="1.5" fill="currentColor" opacity=".6"/><rect x="11.5" y="11.5" width="1.5" height="1.5" fill="currentColor" opacity=".6"/></svg>
+              </button>
+              <!-- 7. My Ideas -->
+              <button class="rtool-btn" id="rtool-ideas" title="My Ideas & Notes">
+                <svg viewBox="0 0 18 18"><path d="M9 2 C6 2 4 4 4 7 C4 9.5 5.5 11 6.5 12 L6.5 14 A1 1 0 0 0 7.5 15 L10.5 15 A1 1 0 0 0 11.5 14 L11.5 12 C12.5 11 14 9.5 14 7 C14 4 12 2 9 2 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><line x1="7" y1="12" x2="11" y2="12" stroke="currentColor" stroke-width="1"/><line x1="8" y1="15" x2="10" y2="15" stroke="currentColor" stroke-width="1.5"/></svg>
+              </button>
+              <!-- 8. Public Chats -->
+              <button class="rtool-btn" id="rtool-chats" title="Advisory Chat">
+                <svg viewBox="0 0 18 18"><path d="M3 13.5 L3 4 A1.5 1.5 0 0 1 4.5 2.5 L13.5 2.5 A1.5 1.5 0 0 1 15 4 L15 10 A1.5 1.5 0 0 1 13.5 11.5 L6 11.5 L3 13.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><line x1="6" y1="6" x2="12" y2="6" stroke="currentColor" stroke-width="1" opacity=".7"/><line x1="6" y1="8" x2="10" y2="8" stroke="currentColor" stroke-width="1" opacity=".5"/></svg>
+              </button>
+              <!-- 9. Ideas Stream -->
+              <button class="rtool-btn" id="rtool-ideasstream" title="Ideas Stream">
+                <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="none" stroke="currentColor" stroke-width="1.3"/><polygon points="7.5,6 12,9 7.5,12" fill="currentColor"/></svg>
+              </button>
+              <!-- 10. Streams -->
+              <button class="rtool-btn" id="rtool-streams" title="Live Streams">
+                <svg viewBox="0 0 18 18"><rect x="2" y="4" width="9" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><polygon points="12,6 16,4 16,14 12,12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="6.5" cy="9" r="1.5" fill="currentColor"/></svg>
+              </button>
+              <!-- 11. Notifications -->
+              <button class="rtool-btn" id="rtool-notifications" title="Notifications">
+                <svg viewBox="0 0 18 18"><path d="M9 2 C6.2 2 4 4.5 4 8 L4 12 L2.5 13.5 L15.5 13.5 L14 12 L14 8 C14 4.5 11.8 2 9 2 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M7 13.5 A2 2 0 0 0 11 13.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+              </button>
+              <!-- 12. Order Panel -->
+              <button class="rtool-btn" id="rtool-order" title="Order Panel (Simulated)">
+                <svg viewBox="0 0 18 18"><rect x="2" y="2.5" width="14" height="13" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="5" y1="6" x2="13" y2="6" stroke="currentColor" stroke-width="1.3"/><line x1="5" y1="9" x2="13" y2="9" stroke="currentColor" stroke-width="1.3"/><polyline points="5,12 7,14 11,10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <!-- 13. DOM (Depth of Market) -->
+              <button class="rtool-btn" id="rtool-dom" title="Depth of Market (DOM)">
+                <svg viewBox="0 0 18 18"><rect x="2" y="2" width="14" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="7" y1="2" x2="7" y2="16" stroke="currentColor" stroke-width="1.1" opacity=".7"/><line x1="11" y1="2" x2="11" y2="16" stroke="currentColor" stroke-width="1.1" opacity=".7"/><line x1="2" y1="6" x2="16" y2="6" stroke="currentColor" stroke-width="1.1" opacity=".4"/><line x1="2" y1="10" x2="16" y2="10" stroke="currentColor" stroke-width="1.1" opacity=".4"/><line x1="2" y1="12" x2="16" y2="12" stroke="currentColor" stroke-width="1.1" opacity=".4"/><line x1="2" y1="4" x2="16" y2="4" stroke="currentColor" stroke-width="1.1" opacity=".4"/><line x1="2" y1="8" x2="16" y2="8" stroke="currentColor" stroke-width="1.1" opacity=".4"/><line x1="2" y1="14" x2="16" y2="14" stroke="currentColor" stroke-width="1.1" opacity=".4"/></svg>
+              </button>
+              <!-- 14. Object Tree -->
+              <button class="rtool-btn" id="rtool-objecttree" title="Object Tree (Drawings)">
+                <svg viewBox="0 0 18 18"><polygon points="9,2 16,5.5 9,9 2,5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><polyline points="2,8.5 9,12 16,8.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".65"/><polyline points="2,11.5 9,15 16,11.5" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".4"/></svg>
+              </button>
+            </div>
+
+            <!-- BOTTOM GROUP -->
+            <div class="toolbar-group rtool-bottom">
+              <!-- 15. Help Center -->
+              <button class="rtool-btn" id="rtool-help" title="Keyboard Shortcuts">
+                <svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.8 6.8 a2.2 2.2 0 0 1 4.2 0.8 c0 1.5-2.2 1.8-2.2 3.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="9" cy="13" r="0.8" fill="currentColor"/></svg>
+              </button>
+            </div>
+
+          </aside>
+
+        </div><!-- /.right-column -->
+      </main>
+    </div><!-- /.workspace -->
+
+  </div><!-- /.app-container -->
+
+  <!-- KEYBOARD SHORTCUTS MODAL -->
+  <div id="shortcuts-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-label="Keyboard Shortcuts" hidden>
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button class="modal-close" id="shortcuts-close" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="shortcut-section">
+          <h4>Drawing Tools</h4>
+          <div class="shortcut-grid">
+            <kbd>V</kbd><span>Cursor</span>
+            <kbd>C</kbd><span>Crosshair</span>
+            <kbd>T</kbd><span>Trend Line</span>
+            <kbd>R</kbd><span>Ray</span>
+            <kbd>H</kbd><span>Horizontal Line</span>
+            <kbd>L</kbd><span>Vertical Line</span>
+            <kbd>B</kbd><span>Rectangle</span>
+            <kbd>F</kbd><span>Fib Retracement</span>
+            <kbd>A</kbd><span>Text Label</span>
+            <kbd>M</kbd><span>Price Measure</span>
+            <kbd>G</kbd><span>Magnet Mode</span>
+          </div>
+        </div>
+        <div class="shortcut-section">
+          <h4>Assets</h4>
+          <div class="shortcut-grid">
+            <kbd>1</kbd><span>BTC/USDT</span>
+            <kbd>2</kbd><span>ETH/USDT</span>
+            <kbd>3</kbd><span>SOL/USDT</span>
+            <kbd>4</kbd><span>XAU/USD (demo)</span>
+          </div>
+        </div>
+        <div class="shortcut-section">
+          <h4>General</h4>
+          <div class="shortcut-grid">
+            <kbd>?</kbd><span>This panel</span>
+            <kbd>Esc</kbd><span>Close / Cancel draw</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DATA WINDOW OVERLAY (cursor OHLCV) -->
+  <div id="data-window" class="data-window" hidden>
+    <div class="dw-row"><span class="dw-lbl">O</span><span class="dw-val" id="dw-open">—</span></div>
+    <div class="dw-row"><span class="dw-lbl">H</span><span class="dw-val" id="dw-high">—</span></div>
+    <div class="dw-row"><span class="dw-lbl">L</span><span class="dw-val" id="dw-low">—</span></div>
+    <div class="dw-row"><span class="dw-lbl">C</span><span class="dw-val" id="dw-close">—</span></div>
+    <div class="dw-row"><span class="dw-lbl">V</span><span class="dw-val" id="dw-vol">—</span></div>
+  </div>
+
+  <div class="advisory-agent-bubble" id="advisory-agent-bubble" aria-label="Advisory agent bubble">
+    <span class="advisory-agent-title">Advisory Agent</span>
+    <span class="advisory-agent-text" id="advisory-agent-text">15m scalping context only. Non-executing. Placeholder report, not a trade recommendation.</span>
+  </div>
+
+
+  <!-- ═══ HERMES CHAT ═══════════════════════════════════════════════ -->
+  <button id="hermes-fab" class="hermes-fab" title="Chat with Hermes">
+    <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M3 15.5 L3 4.5 A2 2 0 0 1 5 2.5 L15 2.5 A2 2 0 0 1 17 4.5 L17 11.5 A2 2 0 0 1 15 13.5 L7 13.5 L3 15.5 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      <circle cx="7.5" cy="8.5" r="1" fill="currentColor"/>
+      <circle cx="10" cy="8.5" r="1" fill="currentColor"/>
+      <circle cx="12.5" cy="8.5" r="1" fill="currentColor"/>
+    </svg>
+    <span class="hermes-fab-label">Hermes</span>
+  </button>
+
+  <div id="hermes-chat-panel" class="hermes-chat-panel" hidden>
+    <div class="hermes-chat-header">
+      <div class="hermes-chat-header-left">
+        <span class="hermes-chat-icon">▲</span>
+        <div>
+          <div class="hermes-chat-title">Hermes</div>
+          <div class="hermes-chat-subtitle" id="hermes-context-label">Signal Agent · BTC/USDT</div>
+        </div>
+      </div>
+      <button id="hermes-chat-close" class="hermes-chat-close" title="Close">✕</button>
+    </div>
+    <div class="hermes-chat-messages" id="hermes-chat-messages">
+      <div class="hermes-msg hermes-msg--system">
+        <span class="hermes-msg-sender">Hermes</span>
+        <p>Online. I provide advisory signal context for BTC, ETH, and SOL. Ask me about current signals, position state, or session performance.</p>
+      </div>
+    </div>
+    <div class="hermes-chat-typing" id="hermes-typing" hidden>
+      <span></span><span></span><span></span>
+    </div>
+    <div class="hermes-chat-footer">
+      <input id="hermes-chat-input" class="hermes-chat-input" type="text" placeholder="Ask about signals, positions, stats…" autocomplete="off" />
+      <button id="hermes-chat-send" class="hermes-chat-send" title="Send">
+        <svg viewBox="0 0 18 18"><path d="M2 16 L16 9 L2 2 L2 7.5 L11 9 L2 10.5 Z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+  <!-- ══════════════════════════════════════════════════════════════ -->
+
+  <script src="app.js"></script>
+</body>
+</html>

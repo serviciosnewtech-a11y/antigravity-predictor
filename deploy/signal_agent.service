@@ -1,0 +1,51 @@
+[Unit]
+Description=Antigravity Signal Agent (Hermes enrichment layer)
+Documentation=https://github.com/antigravity/predictor
+After=network-online.target docker.service
+Wants=network-online.target
+# Predictor runs inside Docker — no hard Requires on predictor.service.
+# The agent will retry automatically if the predictor is not yet up.
+
+[Service]
+Type=simple
+User=predictor
+Group=predictor
+WorkingDirectory=/opt/predictor/src
+
+# ── Environment ───────────────────────────────────────────────────────────────
+# All vars come from /opt/predictor/.env — never hardcode keys here.
+EnvironmentFile=-/opt/predictor/.env
+
+# Predictor is the Docker container, exposed on the host at port 18910.
+Environment=PREDICTOR_URL=http://127.0.0.1:18910
+
+# CRITICAL: threshold must match actual LightGBM output range (0.18-0.28).
+# .env sets SA_CONFIDENCE_THRESHOLD=0.22 — this line is a safety fallback
+# in case .env is missing. Do NOT change to 0.65 — it will never fire.
+Environment=SA_CONFIDENCE_THRESHOLD=0.22
+
+ExecStart=/opt/predictor/.venv/bin/python -m signal_agent.main
+
+Restart=on-failure
+RestartSec=15s
+StartLimitIntervalSec=120s
+StartLimitBurst=5
+
+# ── Resource limits ───────────────────────────────────────────────────────────
+# News fetches + Claude API call: lightweight. Cap at 512MB / 50% of one CPU.
+MemoryMax=512M
+CPUQuota=50%
+
+# ── Hardening ─────────────────────────────────────────────────────────────────
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/opt/predictor/logs
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signal-agent
+
+[Install]
+WantedBy=multi-user.target

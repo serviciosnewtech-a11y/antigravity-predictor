@@ -1,0 +1,46 @@
+{
+  "exchange": "bybit",
+  "timeframe": "15m",
+  "server": {
+    "host": "0.0.0.0",
+    "port": 18910
+  },
+  "assets": {
+    "BTC/USDT": {
+      "model_long_path":  "/media/hermes/Storage/products/Predictor/models/model_btc_long.txt",
+      "model_short_path": "/media/hermes/Storage/products/Predictor/models/model_btc_short.txt",
+      "buy_threshold":        0.320,
+      "exit_threshold":       0.280,
+      "sell_threshold":       0.320,
+      "exit_short_threshold": 0.280,
+      "tp_atr_mult":    1.5,
+      "sl_atr_mult":    1.0,
+      "spread_offset_pct": 0.0002,
+      "max_candles_held": 4
+    },
+    "ETH/USDT": {
+      "model_long_path":  "/media/hermes/Storage/products/Predictor/models/model_eth_long.txt",
+      "model_short_path": "/media/hermes/Storage/products/Predictor/models/model_eth_short.txt",
+      "buy_threshold":        0.320,
+      "exit_threshold":       0.280,
+      "sell_threshold":       0.320,
+      "exit_short_threshold": 0.280,
+      "tp_atr_mult":    1.5,
+      "sl_atr_mult":    1.0,
+      "spread_offset_pct": 0.0002,
+      "max_candles_held": 4
+    },
+    "SOL/USDT": {
+      "model_long_path":  "/media/hermes/Storage/products/Predictor/models/model_sol_long.txt",
+      "model_short_path": "/media/hermes/Storage/products/Predictor/models/model_sol_short.txt",
+      "buy_threshold":        0.310,
+      "exit_threshold":       0.270,
+      "sell_threshold":       0.310,
+      "exit_short_threshold": 0.270,
+      "tp_atr_mult":    1.5,
+      "sl_atr_mult":    1.0,
+      "spread_offset_pct": 0.0003,
+      "max_candles_held": 4
+    }
+  }
+}

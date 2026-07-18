@@ -1,0 +1,32 @@
+{
+  "baseline": {
+    "horizon_bars": 4,
+    "limit": 1000,
+    "lookback_window": 20,
+    "market_type": "spot",
+    "max_rows": 10000,
+    "sl_pct": 0.002,
+    "sweep_lookback": 20,
+    "symbol": "BTC/USDT",
+    "timeframe": "15m",
+    "tp_pct": 0.003,
+    "volume_block_window": 20
+  },
+  "dataset": "/media/hermes/Storage/Antigravity/Trading_bot_consolidated/vault/isolated_lgbm/data/bybit_ethusdt_15m_3y_atr_dataset.parquet",
+  "label_col": "label_short",
+  "test_metrics": {
+    "positives": 1827,
+    "rows": 16061,
+    "test_auc": 0.6397671832570304,
+    "test_logloss": 0.33971533150202743
+  },
+  "test_rows": 16061,
+  "train_rows": 74951,
+  "valid_metrics": {
+    "best_iteration": 70,
+    "scale_pos_weight": 1.0,
+    "valid_auc": 0.6375999799727128,
+    "valid_logloss": 0.35273599231253644
+  },
+  "valid_rows": 16061
+}

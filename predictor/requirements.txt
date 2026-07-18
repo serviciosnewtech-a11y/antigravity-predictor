@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+websockets
+lightgbm
+pandas
+numpy
+requests
+loguru

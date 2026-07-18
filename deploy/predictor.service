@@ -1,0 +1,33 @@
+[Unit]
+Description=Antigravity Predictor Server
+Documentation=https://github.com/your-repo/predictor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=predictor
+Group=predictor
+WorkingDirectory=/opt/predictor/src
+
+# Use the venv if present, otherwise system python
+ExecStart=/opt/predictor/.venv/bin/python predictor_server.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/predictor/logs/predictor.log
+StandardError=append:/opt/predictor/logs/predictor.log
+
+# Resource limits — comfortable on 6vCPU / 12GB VPS
+LimitNOFILE=65536
+MemoryMax=3G
+CPUQuota=200%
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/predictor/logs /opt/predictor/models /opt/predictor/data
+
+[Install]
+WantedBy=multi-user.target

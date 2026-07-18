@@ -1,0 +1,13 @@
+[Unit]
+Description=Macro Data Refresh (Gold/Oil/DXY/SPX/VIX)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=predictor
+WorkingDirectory=/opt/predictor/src
+ExecStart=/opt/predictor/.venv/bin/python fetch_macro.py \
+    --data-dir /opt/predictor/data/macro \
+    --days 730
+StandardOutput=append:/opt/predictor/logs/macro_refresh.log
+StandardError=append:/opt/predictor/logs/macro_refresh.log

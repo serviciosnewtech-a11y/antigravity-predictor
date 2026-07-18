@@ -1,0 +1,47 @@
+{
+  "exchange": "bybit",
+  "timeframe": "15m",
+  "server": {
+    "host": "0.0.0.0",
+    "port": 18910
+  },
+  "assets": {
+    "BTC/USDT": {
+      "model_long_path":  "models/model_btc_long.txt",
+      "model_short_path": "models/model_btc_short.txt",
+      "buy_threshold":        0.1898,
+      "exit_threshold":       0.1537,
+      "sell_threshold":       0.2568,
+      "exit_short_threshold": 0.1981,
+      "tp_atr_mult":    1.5,
+      "sl_atr_mult":    1.0,
+      "spread_offset_pct": 0.0002,
+      "max_candles_held": 4
+    },
+    "ETH/USDT": {
+      "model_long_path":  "models/model_eth_long.txt",
+      "model_short_path": "models/model_eth_short.txt",
+      "buy_threshold":        0.1934,
+      "exit_threshold":       0.1701,
+      "sell_threshold":       0.2149,
+      "exit_short_threshold": 0.1886,
+      "tp_atr_mult":    1.5,
+      "sl_atr_mult":    1.0,
+      "spread_offset_pct": 0.0002,
+      "max_candles_held": 4
+    },
+    "SOL/USDT": {
+      "model_long_path":  "models/model_sol_long.txt",
+      "model_short_path": "models/model_sol_short.txt",
+      "buy_threshold":        9.9999,
+      "exit_threshold":       9.9999,
+      "sell_threshold":       0.2281,
+      "exit_short_threshold": 0.2060,
+      "tp_atr_mult":    1.5,
+      "sl_atr_mult":    1.0,
+      "spread_offset_pct": 0.0003,
+      "max_candles_held": 4,
+      "_note": "SOL long disabled — win rate below 40% breakeven at all thresholds. Short only."
+    }
+  }
+}

@@ -1,0 +1,39 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg-info
+.venv/
+venv/
+src/btc_lightgbm_poc.egg-info/
+
+# Runtime data
+data/
+*.log
+logs/
+forge_data/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Model artifacts — keep production models, exclude noise
+models/staging/
+models/backup_*/
+models/model.txt
+models/model_long.txt
+models/model_short.txt
+models/model_*_2026070*.txt
+models/top_level.txt
+
+# Temp files
+dashboard/index.html.tmp
+src/__probe_test.txt
+
+# Sentinel written by retrain_all.sh in Docker mode
+models/.retrain_complete
