@@ -38,6 +38,13 @@ TARGET_HERMES_DEPLOY_PROMPT.md
 
 Paste that prompt into Hermes on the target PC, replacing the tarball path and SHA256 placeholders.
 
+## Technical dossier and paper-evaluation planning
+
+- `ANTIGRAVITY_PREDICTOR_BETA1_FULL_TECHNICAL_DOSSIER.md` — Beta 1 technical dossier, 15m trading intent, dry-run baseline values, and SOUL-ready operating boundaries.
+- `docs/reporting/LOGGING_SPEC.md` — proposed append-only paper-evaluation logging spec.
+- `docs/reporting/REPORT_TEMPLATE.md` — proposed weekly paper report template.
+- `docs/plans/BETA_1_1_LOGGING_IMPLEMENTATION_PLAN.md` — implementation plan for adopting the logging/reporting spec without changing Beta 1 runtime behavior.
+
 ## Diagnose
 
 ```bash
