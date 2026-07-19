@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from collections import deque
+from pathlib import Path
 from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, Header, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.responses import JSONResponse
@@ -1413,6 +1414,86 @@ def _model_performance_context() -> str:
     return "\n".join(lines)
 
 
+def _live_system_context() -> str:
+    """
+    Broader read-only situational awareness for the Tutor: per-asset feature
+    parity, executor dry-run status, and Forge's current leaderboard leader
+    (if reachable). This is still purely informational — the Tutor has no
+    tool wired to act on any of it. Every lookup is best-effort: a service
+    being unreachable just means that section is omitted, never an error
+    surfaced to the user.
+    """
+    lines = []
+    for sym, eng in engines.items():
+        with eng.lock:
+            lines.append(
+                f"{sym}: signal={eng.latest_signal}, degraded={eng.degraded}, "
+                f"missing_features={len(eng.missing_features)}, "
+                f"inference_blocked_count={eng.inference_blocked_count}"
+            )
+    try:
+        r = requests.get("http://127.0.0.1:18911/health", timeout=1.5)
+        if r.status_code == 200:
+            h = r.json()
+            lines.append(f"Executor: dry_run={h.get('dry_run')}, open_positions={h.get('open_positions')}")
+    except Exception:
+        pass
+    try:
+        r = requests.get("http://127.0.0.1:18912/leaderboard", timeout=1.5)
+        if r.status_code == 200:
+            board = r.json()
+            if board:
+                top = board[0]
+                lines.append(
+                    f"Forge leaderboard leader: {top.get('strategy_name')} "
+                    f"win_rate={top.get('win_rate')} net_pnl={top.get('net_pnl')}"
+                )
+    except Exception:
+        pass
+    return "\n".join(lines) if lines else "No live system data available."
+
+
+_TUTOR_MEMORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "tutor_memory.jsonl")
+_TUTOR_MEMORY_RECALL = 12  # how many past exchanges to fold back into context
+
+
+def _tutor_memory_recall() -> str:
+    """Best-effort read of recent past tutor exchanges, persisted server-side
+    across sessions/reloads (the client's own history[] only lives in the
+    browser tab). Missing/unreadable file just means no memory yet."""
+    try:
+        path = Path(_TUTOR_MEMORY_PATH)
+        if not path.exists():
+            return ""
+        lines = path.read_text().strip().splitlines()[-_TUTOR_MEMORY_RECALL:]
+        recalled = []
+        for line in lines:
+            try:
+                rec = json.loads(line)
+                recalled.append(f"[{rec.get('ts', '')}] user: {rec.get('user', '')}\ntutor: {rec.get('tutor', '')}")
+            except Exception:
+                continue
+        return "\n\n".join(recalled)
+    except Exception:
+        return ""
+
+
+def _tutor_memory_append(user_msg: str, tutor_reply: str) -> None:
+    """Append this exchange to the persistent memory log. Best-effort —
+    a write failure here should never break the chat response itself."""
+    try:
+        path = Path(_TUTOR_MEMORY_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "user": user_msg,
+                "tutor": tutor_reply,
+            }) + "\n")
+    except Exception as e:
+        logger.warning(f"[tutor] memory append failed (non-fatal): {e}")
+
+
 @app.post("/api/tutor-chat")
 async def hermes_tutor_chat(req: _ChatRequest):
     """
@@ -1434,16 +1515,20 @@ async def hermes_tutor_chat(req: _ChatRequest):
         "Respond in Spanish. " if lang == "es" else "Respond in English. "
     )
 
+    memory_recall = _tutor_memory_recall()
     system_ctx = (
         _TUTOR_SYSTEM_PROMPT
         + f"\n\n[Live signal context]\nAsset in view: {sym}. Current signal: {signal}. "
         + f"long_prob={long_prob:.4f}, short_prob={short_prob:.4f}."
+        + f"\n\n[Full system context — read-only, you cannot change any of this]\n{_live_system_context()}"
         + f"\n\n[Model performance context]\n{_model_performance_context()}"
+        + (f"\n\n[Recalled memory from earlier conversations with this operator]\n{memory_recall}" if memory_recall else "")
         + f"\n\n[Language]\n{language_rule}"
     )
 
     result = _call_llm_backend(system_ctx, req.message, req.history, _backend_config("TUTOR_"))
     if result:
+        _tutor_memory_append(req.message, result["reply"])
         return {
             "reply": result["reply"],
             "source": result["source"],

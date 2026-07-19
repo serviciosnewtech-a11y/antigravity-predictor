@@ -131,6 +131,24 @@ else
     echo "[monolith] Signal Agent skipped (--no-agent)."
 fi
 
+# ── Admin Agent (opt-in only — UNRESTRICTED shell access, operator-only) ───
+# Off unless BOTH ENABLE_ADMIN_AGENT=true AND ADMIN_API_TOKEN are set in
+# .env — this is deliberate: the admin agent gives an LLM real shell access
+# on this machine with no per-command confirmation, gated only by the
+# bearer token. It is never started silently. Talk to it with
+# `python3 tools/admin_chat.py`, never via the public dashboard.
+if [[ "${ENABLE_ADMIN_AGENT:-false}" == "true" ]]; then
+    if [[ -z "${ADMIN_API_TOKEN:-}" ]]; then
+        echo "[monolith] ENABLE_ADMIN_AGENT=true but ADMIN_API_TOKEN is unset — refusing to start it unprotected. Set ADMIN_API_TOKEN in .env."
+    else
+        echo "[monolith] Starting Admin Agent on :${ADMIN_AGENT_PORT:-18913} — UNRESTRICTED shell access, operator-only (see admin_agent/server.py) …"
+        "$PYTHON" "$SCRIPT_DIR/admin_agent/server.py" &
+        PIDS+=($!)
+    fi
+else
+    echo "[monolith] Admin Agent skipped (ENABLE_ADMIN_AGENT is not 'true')."
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo " Antigravity Predictor — bare-metal monolith running"
@@ -140,6 +158,7 @@ echo " Predictor status: http://localhost:18910/api/status"
 echo " Feature parity:   http://localhost:18910/api/feature-parity/BTC_USDT"
 [[ $NO_EXECUTOR -eq 0 ]] && echo " Executor health:  http://localhost:18911/health"
 [[ $NO_FORGE    -eq 0 ]] && echo " Forge health:     http://localhost:18912/health"
+[[ "${ENABLE_ADMIN_AGENT:-false}" == "true" && -n "${ADMIN_API_TOKEN:-}" ]] && echo " Admin agent:      http://localhost:${ADMIN_AGENT_PORT:-18913}/health  (talk to it via: python3 tools/admin_chat.py)"
 echo ""
 echo " Press Ctrl+C to stop all processes."
 echo "══════════════════════════════════════════════════════"
