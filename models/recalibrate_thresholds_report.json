@@ -1,0 +1,68 @@
+{
+  "model_btc_long": {
+    "actual_fire_rate": 0.5,
+    "direction": "long",
+    "entry_threshold": 0.0692,
+    "exit_threshold": 0.0554,
+    "prob_max": 0.3606,
+    "prob_median": 0.0692,
+    "prob_min": 0.0115,
+    "symbol": "BTC/USDT",
+    "target_fire_rate": 0.5
+  },
+  "model_btc_short": {
+    "actual_fire_rate": 0.5,
+    "direction": "short",
+    "entry_threshold": 0.0749,
+    "exit_threshold": 0.0599,
+    "prob_max": 0.3773,
+    "prob_median": 0.0749,
+    "prob_min": 0.0066,
+    "symbol": "BTC/USDT",
+    "target_fire_rate": 0.5
+  },
+  "model_eth_long": {
+    "actual_fire_rate": 0.5,
+    "direction": "long",
+    "entry_threshold": 0.0952,
+    "exit_threshold": 0.0762,
+    "prob_max": 0.3381,
+    "prob_median": 0.0952,
+    "prob_min": 0.0465,
+    "symbol": "ETH/USDT",
+    "target_fire_rate": 0.5
+  },
+  "model_eth_short": {
+    "actual_fire_rate": 0.5,
+    "direction": "short",
+    "entry_threshold": 0.1026,
+    "exit_threshold": 0.0821,
+    "prob_max": 0.3312,
+    "prob_median": 0.1026,
+    "prob_min": 0.022,
+    "symbol": "ETH/USDT",
+    "target_fire_rate": 0.5
+  },
+  "model_sol_long": {
+    "actual_fire_rate": 0.5,
+    "direction": "long",
+    "entry_threshold": 0.1051,
+    "exit_threshold": 0.0841,
+    "prob_max": 0.3088,
+    "prob_median": 0.1051,
+    "prob_min": 0.0625,
+    "symbol": "SOL/USDT",
+    "target_fire_rate": 0.5
+  },
+  "model_sol_short": {
+    "actual_fire_rate": 0.5,
+    "direction": "short",
+    "entry_threshold": 0.1165,
+    "exit_threshold": 0.0932,
+    "prob_max": 0.2471,
+    "prob_median": 0.1165,
+    "prob_min": 0.0676,
+    "symbol": "SOL/USDT",
+    "target_fire_rate": 0.5
+  }
+}
