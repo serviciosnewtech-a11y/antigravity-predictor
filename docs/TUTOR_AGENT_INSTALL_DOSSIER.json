@@ -13,11 +13,16 @@
   },
 
   "deployment_package": {
-    "filename": "antigravity-predictor-deploy-20260719T155532Z.tar.gz",
-    "sha256": "2999f6faa5ca188066e99fac023c60058cbea7d6fc981ccad6bec78ba4004be2",
-    "size_bytes": 474908,
+    "filename_pattern": "antigravity-predictor-deploy-<UTC-build-timestamp>.tar.gz",
+    "checksum_verification": "Non-circular by design: this dossier is packaged INSIDE the tarball it describes, so it cannot embed that tarball's own final checksum (the hash would change the moment the checksum was written into the file). Every shipped tarball has a sidecar file alongside it named <tarball-filename>.sha256 (plain `sha256sum` output format) generated AFTER the tarball is finalized — verify with `sha256sum -c <tarball-filename>.sha256`. Do not trust a checksum for this package found anywhere other than that sidecar file or a value the operator states directly in chat.",
+    "last_known_snapshot_for_reference_only": {
+      "filename": "antigravity-predictor-deploy-20260719T155532Z.tar.gz",
+      "sha256": "2999f6faa5ca188066e99fac023c60058cbea7d6fc981ccad6bec78ba4004be2",
+      "size_bytes": 474908,
+      "note": "This was the package immediately BEFORE this dossier file was added to the repo. It does not contain this dossier. It is listed only as provenance evidence of the build that immediately preceded this one — do not install from it if a newer package/sidecar checksum is available."
+    },
     "built_from_commit": "e0a83e981e8b6750a95f07cde467f270ce5c284a",
-    "install_command": "tar -xzf antigravity-predictor-deploy-20260719T155532Z.tar.gz && cd antigravity-predictor-deploy-20260719T155532Z && bash start.sh",
+    "install_command": "tar -xzf <tarball-filename> && cd <extracted-dir> && bash start.sh",
     "install_command_notes": "start.sh is idempotent: locates python3.10-3.13, creates .venv/ if absent (reuses if present), pip installs requirements.txt (no-ops on already-satisfied packages), then execs run_monolith.sh. No manual venv activation or pip step required. Verified end-to-end from three independent clean extractions (no pre-existing .venv, no pre-warmed pip cache) — see verification_log below.",
     "requirements_file": "requirements.txt (consolidated; every third-party import in the package was grepped and cross-checked; optional/unused-by-default deps listed commented-out with the file that would need them)",
     "python_version_tested": "3.10.12",
