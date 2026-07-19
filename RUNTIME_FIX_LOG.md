@@ -4,13 +4,15 @@
 
 **Repo:** https://github.com/serviciosnewtech-a11y/antigravity-predictor
 
-**Current main commit at log start:** `b48f1dce395076122b1a9261e648e2c7e55f5de7`
+**Current main commit at log start:** `bce7598eefe29a6f034a0299e5e7fd9a4852e3ce`
 
 **Operating posture:**
 - Fix the minimum required to get the test deployment running.
+- Target/local Hermes is configuration/install/runtime-reporting only; it must not patch core repo code or diagnose by editing source files.
+- Core issues found on the test machine are reported back as evidence and fixed by the controller/repo workflow.
 - Keep `DRY_RUN=true` and exchange keys empty.
 - Do not enable live trading.
-- Do not apply ad-hoc host patches on the test machine unless explicitly approved.
+- Do not apply ad-hoc host patches or source-code patches on the test machine unless explicitly approved.
 - Source fixes should be committed at repo level and deployed by pull/rebuild.
 - Prefer real runtime evidence over hypothetical hardening changes.
 - Record blockers, commands, outputs, and follow-up items here so repeated realtime runs can be streamlined.
@@ -48,11 +50,17 @@ Observed failures:
   suspected cause:
   owner: controller | target Hermes | repo fix | operator
 
-Bare-minimum fixes applied:
+Configuration/install fixes applied by target agent:
 - fix:
   file/path:
   reason:
   verification:
+
+Core/code fixes required upstream:
+- issue:
+  evidence:
+  repo file/path if known:
+  owner: controller/repo workflow
 
 Verification:
 - docker compose ps:
@@ -80,7 +88,7 @@ Goal:
 Prepare the repo for target-machine, agent-assisted install testing with minimum viable deployment posture.
 
 Source state:
-- commit: `b48f1dce395076122b1a9261e648e2c7e55f5de7`
+- commit: `bce7598eefe29a6f034a0299e5e7fd9a4852e3ce`
 - repo: https://github.com/serviciosnewtech-a11y/antigravity-predictor
 - visibility: public, verified by anonymous ls-remote and clone smoke
 
@@ -92,7 +100,8 @@ Evidence already captured:
 
 Current agreed posture:
 - Run agent-assisted install on test machine from GitHub.
-- Fix only what blocks the app from running in safe test mode.
+- Target/local Hermes may adjust configuration/install steps only within the approved brief.
+- Target/local Hermes must not patch core app issues; it reports evidence so fixes can be made at repo level by the controller workflow.
 - Use the hardening backlog as follow-up guidance, not as the immediate implementation scope.
 - Record realtime failures before deciding which hardening/correctness items to implement.
 

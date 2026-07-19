@@ -8,7 +8,7 @@
 
 **Clone URL:** `https://github.com/serviciosnewtech-a11y/antigravity-predictor.git`
 
-**Verified source commit:** `4c791d4f1d4fbd36642569aa60f0d37bda8e52a6`
+**Verified source commit:** `bce7598eefe29a6f034a0299e5e7fd9a4852e3ce`
 
 **Install root:** `~/antigravity-predictor-test/antigravity-predictor`
 
@@ -21,6 +21,8 @@
 You are the **execution worker on the test machine**.
 
 Do exactly this install test. Do not redesign, refactor, simplify, replace services, change the product architecture, or invent alternative deployment paths unless the documented path is blocked by concrete evidence.
+
+Authority boundary: target/local Hermes may handle configuration, install execution, runtime checks, logs, and blocker reporting only. It must not patch core application code, hardening logic, model logic, dashboard code, Dockerfiles, or repo source files. Core issues found during the run are reported back with evidence and fixed through the controller/repo workflow.
 
 The product must remain deployable without requiring Hermes, Anthropic, Ollama, OpenAI, or any target-side agent as a hard dependency. Hermes on the target machine is only the installer/verifier. The app's optional chat/enrichment backend may stay disabled.
 
@@ -37,7 +39,7 @@ Stop immediately and report evidence if any of these are true:
    - `18911`
    - `18912`
 5. Any step requires sudo, destructive host changes, wiping unknown directories, firewall changes, package installation, credential entry, or production exchange setup.
-6. The GitHub clone does not resolve to commit `4c791d4f1d4fbd36642569aa60f0d37bda8e52a6` or a later operator-approved commit.
+6. The GitHub clone does not resolve to commit `bce7598eefe29a6f034a0299e5e7fd9a4852e3ce` or a later operator-approved commit.
 7. A command fails and the next action is not explicitly covered by this dossier or by `diagnose.sh`.
 
 Do not continue under uncertainty. Return a concise blocker report.
@@ -103,7 +105,7 @@ git rev-parse HEAD
 Expected commit unless the operator explicitly approved a newer one:
 
 ```text
-4c791d4f1d4fbd36642569aa60f0d37bda8e52a6
+bce7598eefe29a6f034a0299e5e7fd9a4852e3ce
 ```
 
 Then:
@@ -265,7 +267,7 @@ bash diagnose.sh
 
 Return the full `diagnose.sh` output.
 
-Do not patch code on the test machine unless the operator explicitly asks. The test machine is for install verification. Source changes belong in the repo workflow and must be pushed from the controller side after diagnosis.
+Do not patch code on the test machine unless the operator explicitly asks. The test machine is for configuration, install verification, runtime checks, and blocker reporting. Source changes belong in the repo workflow and must be pushed from the controller side after diagnosis.
 
 ---
 
