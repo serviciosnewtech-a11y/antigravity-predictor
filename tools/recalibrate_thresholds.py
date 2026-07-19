@@ -39,9 +39,11 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import _bootstrap  # noqa: F401
 from predictor_server import build_features  # noqa: E402
 
-from retrain_live_features import LIVE_FEATURE_COLUMNS, ASSETS, time_split  # noqa: E402
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from retrain_live_features import (  # noqa: E402
+    ASSETS, BASE_LIVE_FEATURE_COLUMNS, time_split,
+    fetch_all_expanded, assemble_expanded_table, feature_columns_for,
+)
 
 
 def main() -> int:
@@ -53,6 +55,10 @@ def main() -> int:
     parser.add_argument("--cache-dir", default=str(REPO_ROOT / ".retrain_cache"))
     parser.add_argument("--config", default=str(REPO_ROOT / "config.json"))
     parser.add_argument("--models-dir", default=str(REPO_ROOT / "models"))
+    parser.add_argument("--no-expand", action="store_true",
+                         help="Recalibrate against the base-41-only feature set (matches models trained with --no-expand).")
+    parser.add_argument("--days", type=int, default=90,
+                         help="Only used to bound the funding/mark/index re-fetch if the cache needs refreshing.")
     args = parser.parse_args()
 
     cache_dir = Path(args.cache_dir)
@@ -62,19 +68,35 @@ def main() -> int:
 
     results = {}
 
+    if args.no_expand:
+        base_feats, funding_tables = {}, {}
+        for symbol in ASSETS:
+            cache_path = cache_dir / f"{symbol.replace('/', '_')}.parquet"
+            raw = pd.read_parquet(cache_path)
+            candles = [
+                {"time": int(ts.timestamp()), "open": o, "high": h, "low": l, "close": c, "volume": v}
+                for ts, o, h, l, c, v in zip(raw["timestamp"], raw["open"], raw["high"],
+                                              raw["low"], raw["close"], raw["volume"])
+            ]
+            base_feats[symbol] = build_features(candles).rename(columns={"date": "timestamp"})
+    else:
+        # Reuses whatever is already cached in cache_dir (OHLCV, funding
+        # history, mark/index klines) — network calls only happen for
+        # whatever's missing or stale, same resumable pattern as the
+        # retrain script itself.
+        _, base_feats, funding_tables, _ = fetch_all_expanded(args.days, "bybit", cache_dir)
+
     for symbol, cfg in ASSETS.items():
-        cache_path = cache_dir / f"{symbol.replace('/', '_')}.parquet"
-        raw = pd.read_parquet(cache_path)
-        candles = [
-            {"time": int(ts.timestamp()), "open": o, "high": h, "low": l, "close": c, "volume": v}
-            for ts, o, h, l, c, v in zip(raw["timestamp"], raw["open"], raw["high"],
-                                          raw["low"], raw["close"], raw["volume"])
-        ]
-        feats = build_features(candles)
+        if args.no_expand:
+            feats = base_feats[symbol]
+            feature_columns = BASE_LIVE_FEATURE_COLUMNS
+        else:
+            feats, feature_columns = assemble_expanded_table(symbol, base_feats, funding_tables)
+
         # Same time_split as training so "validation" here is the same
         # slice the model's threshold was originally chosen against.
         train_df, valid_df, test_df = time_split(feats.dropna().reset_index(drop=True))
-        X_valid = valid_df[LIVE_FEATURE_COLUMNS].astype(float)
+        X_valid = valid_df[feature_columns].astype(float)
 
         for direction in ("long", "short"):
             model_name = f"model_{cfg['model_prefix']}_{direction}"

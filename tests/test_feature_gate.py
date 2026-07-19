@@ -143,8 +143,13 @@ def test_family_classification_matches_p0_audit_grouping():
     assert classify_feature_family("btc_1h_regime") == "higher_tf_btc_1h"
     assert classify_feature_family("btc_4h_regime") == "higher_tf_btc_4h"
     assert classify_feature_family("btc_1d_regime") == "higher_tf_btc_1d"
-    assert classify_feature_family("eth_trend") == "cross_asset_eth_sol"
-    assert classify_feature_family("sol_trend") == "cross_asset_eth_sol"
+    # Renamed from "cross_asset_eth_sol" -> "cross_asset_peers" when the
+    # H-13 follow-up feature expansion added per-model peer columns (each
+    # model's peers are whichever two of btc/eth/sol aren't its own asset,
+    # so "eth_sol" wasn't accurate for e.g. the ETH model's btc_/sol_ cols).
+    assert classify_feature_family("eth_trend") == "cross_asset_peers"
+    assert classify_feature_family("sol_trend") == "cross_asset_peers"
+    assert classify_feature_family("btc_trend") == "cross_asset_peers"
     assert classify_feature_family("gold_trend_dir") == "macro_gold"
     assert classify_feature_family("oil_trend_dir") == "macro_oil"
     assert classify_feature_family("dxy_trend_dir") == "macro_dxy"
@@ -234,8 +239,8 @@ def test_healthy_vector_reaches_model_call(engine_with_stub_models):
 
     orig = ps.build_features
 
-    def _all_features_build(candles):
-        df = orig(candles)
+    def _all_features_build(candles, funding_ctx=None, peer_ctx=None):
+        df = orig(candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx)
         for name in FEATURE_NAMES:
             if name not in df.columns:
                 df[name] = 0.42
@@ -279,8 +284,8 @@ def test_non_finite_injected_feature_blocks_even_if_present(engine_with_stub_mod
 
     orig = ps.build_features
 
-    def _poisoned_build(candles):
-        df = orig(candles)
+    def _poisoned_build(candles, funding_ctx=None, peer_ctx=None):
+        df = orig(candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx)
         for name in FEATURE_NAMES:
             if name not in df.columns:
                 df[name] = 0.42

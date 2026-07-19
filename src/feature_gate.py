@@ -40,7 +40,13 @@ _FAMILY_RULES: List[tuple[str, tuple[str, ...]]] = [
     ("higher_tf_btc_1h", ("btc_1h_",)),
     ("higher_tf_btc_4h", ("btc_4h_",)),
     ("higher_tf_btc_1d", ("btc_1d_",)),
-    ("cross_asset_eth_sol", ("eth_", "sol_")),
+    # Cross-asset peer context (feature-expansion follow-up to H-13): each
+    # model's peer columns are named for whichever two of {btc,eth,sol}
+    # aren't its own asset (e.g. the ETH model has btc_return_1/sol_return_1,
+    # not eth_return_1). Matched generically here since the specific pair
+    # differs per model; checked after the more specific higher_tf_btc_*
+    # rules above so btc_1h_/btc_4h_/btc_1d_ columns aren't miscategorized.
+    ("cross_asset_peers", ("btc_", "eth_", "sol_")),
     ("macro_gold", ("gold_",)),
     ("macro_oil", ("oil_",)),
     ("macro_dxy", ("dxy_",)),

@@ -7,6 +7,7 @@ import requests
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+from collections import deque
 from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, Header, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.responses import JSONResponse
@@ -148,8 +149,68 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# ── Feature expansion (H-13 follow-up: funding/mark/basis + cross-asset) ────
+# The original H-13 retrain deliberately shipped only the 41 features
+# computable from a single asset's own OHLCV buffer, to close the signal
+# gap fast. These two families are the next-cheapest to add for real:
+#   - primary_futures_funding_mark_basis (8 cols): Bybit's public tickers
+#     endpoint already returns fundingRate/markPrice/indexPrice for free,
+#     no auth, one call per asset.
+#   - cross_asset_peers (8 cols): the other two AssetEngine instances
+#     already run in-process computing their own basic features every
+#     tick — reading their last computed row costs nothing extra.
+# Column names for the peer family are dynamic per-model: whichever two
+# of {btc,eth,sol} are NOT this model's own asset, in canonical ASSETS
+# order. E.g. the BTC model gets eth_return_1/sol_return_1/etc; the ETH
+# model gets btc_return_1/sol_return_1/etc.
+FUNDING_FEATURE_COLUMNS = [
+    "funding_rate", "funding_rate_abs", "funding_rate_mean_4", "funding_rate_std_4",
+    "mark_basis", "mark_premium", "mark_premium_mean_4", "futures_pressure",
+]
+PEER_FEATURE_SUFFIXES = ["return_1", "return_3", "trend", "volume_block"]
+
+_FUNDING_SNAPSHOT_CACHE: dict = {}   # symbol -> {"data": {...}, "fetched_at": ts}
+_FUNDING_SNAPSHOT_TTL_S = 60.0
+
+
+def fetch_funding_snapshot(symbol: str) -> Optional[dict]:
+    """
+    Live funding_rate/markPrice/indexPrice for one symbol via Bybit's public
+    tickers endpoint (no auth required). Cached per-symbol for
+    _FUNDING_SNAPSHOT_TTL_S to avoid hammering the endpoint on every tick.
+    Returns None (not a fake zero) if the fetch fails — callers must treat
+    that as "funding context unavailable" and let the H-13 gate see missing
+    columns, not silently zero-fill.
+    """
+    now = time.time()
+    cached = _FUNDING_SNAPSHOT_CACHE.get(symbol)
+    if cached and (now - cached["fetched_at"]) < _FUNDING_SNAPSHOT_TTL_S:
+        return cached["data"]
+    try:
+        bybit_sym = symbol.replace("/", "")
+        r = requests.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear", "symbol": bybit_sym},
+            timeout=5,
+        )
+        data = r.json()
+        row = (data.get("result", {}).get("list") or [None])[0]
+        if not row:
+            return None
+        snapshot = {
+            "funding_rate": float(row["fundingRate"]),
+            "mark_price": float(row["markPrice"]),
+            "index_price": float(row["indexPrice"]),
+        }
+        _FUNDING_SNAPSHOT_CACHE[symbol] = {"data": snapshot, "fetched_at": now}
+        return snapshot
+    except Exception as e:
+        logger.warning(f"[funding] fetch_funding_snapshot({symbol}) failed: {e}")
+        return None
+
+
 # ── Feature Engineering (shared across all assets) ───────────────────────────
-def build_features(candles: list[dict]) -> pd.DataFrame:
+def build_features(candles: list[dict], funding_ctx: Optional[dict] = None, peer_ctx: Optional[dict] = None) -> pd.DataFrame:
     df = pd.DataFrame(candles)
     df["date"] = pd.to_datetime(df["time"], unit="s")
     out = df.sort_values("date").reset_index(drop=True)
@@ -256,6 +317,24 @@ def build_features(candles: list[dict]) -> pd.DataFrame:
         if calc in out.columns and exp not in out.columns:
             out[exp] = out[calc]
 
+    # ── Funding/mark/basis context (broadcast: these are "as of now" live
+    # readings, not per-historical-candle series — only the LAST row is
+    # ever actually used for a live prediction, so a constant across the
+    # buffer is correct here. Absent entirely if funding_ctx is None —
+    # that means the columns are simply not added, which the H-13 gate
+    # correctly reports as MISSING rather than a fake zero.) ──────────────
+    if funding_ctx:
+        for col in FUNDING_FEATURE_COLUMNS:
+            if col in funding_ctx:
+                out[col] = funding_ctx[col]
+
+    # ── Cross-asset peer context (same broadcast rationale as above) ────
+    if peer_ctx:
+        for prefix, values in peer_ctx.items():
+            for suffix in PEER_FEATURE_SUFFIXES:
+                if suffix in values:
+                    out[f"{prefix}_{suffix}"] = values[suffix]
+
     return out
 
 
@@ -282,6 +361,23 @@ class AssetEngine:
         self.win_trades  = 0
         self.loss_trades = 0
         self.lock = threading.Lock()
+
+        # ── Feature expansion state (funding/mark/basis + cross-asset peers) ──
+        # funding_history: rolling window of the last 4 funding snapshots this
+        # engine has actually fetched (not last-4-8h-periods — samples are
+        # taken on whatever cadence _run_prediction runs at, gated by
+        # _FUNDING_SNAPSHOT_TTL_S upstream). Used for funding_rate_mean_4/std_4
+        # and mark_premium_mean_4.
+        self.funding_history: deque = deque(maxlen=4)
+        # latest_basic_ctx: this engine's own last-row return/trend/volume
+        # values, published for the OTHER two engines to read as cross-asset
+        # peer context — avoids every engine recomputing every other engine's
+        # features on every tick. None until this engine has completed at
+        # least one prediction cycle.
+        self.latest_basic_ctx: Optional[dict] = None
+        self.peer_prefixes: list[str] = [
+            s.split("/")[0].lower() for s in ASSETS if s != self.symbol
+        ]
 
     def load_models(self):
         logger.info(f"[{self.symbol}] Loading Long model: {self.cfg['model_long_path']}")
@@ -325,11 +421,81 @@ class AssetEngine:
                     self.candles.pop(0)
             self._run_prediction(confirm, loop)
 
+    def _build_funding_ctx(self) -> Optional[dict]:
+        """
+        Fetch/refresh this engine's funding snapshot (cached upstream), fold
+        it into the rolling funding_history, and derive the 8
+        FUNDING_FEATURE_COLUMNS values. Returns None if no snapshot is
+        available at all yet (e.g. first tick, or Bybit unreachable) — the
+        caller must NOT substitute zeros; build_features() simply omits
+        these columns in that case, which the H-13 gate reports as missing.
+        """
+        snap = fetch_funding_snapshot(self.symbol)
+        if snap is None and not self.funding_history:
+            return None
+        if snap is not None:
+            mark_basis = (
+                (snap["mark_price"] - snap["index_price"]) / snap["index_price"]
+                if snap["index_price"] else 0.0
+            )
+            self.funding_history.append({"funding_rate": snap["funding_rate"], "mark_basis": mark_basis})
+        if not self.funding_history:
+            return None
+        funding_rates = [h["funding_rate"] for h in self.funding_history]
+        mark_bases     = [h["mark_basis"]   for h in self.funding_history]
+        latest_funding = funding_rates[-1]
+        latest_basis   = mark_bases[-1]
+        mean4 = sum(funding_rates) / len(funding_rates)
+        std4 = (
+            (sum((x - mean4) ** 2 for x in funding_rates) / len(funding_rates)) ** 0.5
+            if len(funding_rates) > 1 else 0.0
+        )
+        mark_premium_mean4 = sum(mark_bases) / len(mark_bases)
+        return {
+            "funding_rate": latest_funding,
+            "funding_rate_abs": abs(latest_funding),
+            "funding_rate_mean_4": mean4,
+            "funding_rate_std_4": std4,
+            "mark_basis": latest_basis,
+            "mark_premium": latest_basis,
+            "mark_premium_mean_4": mark_premium_mean4,
+            "futures_pressure": latest_basis - latest_funding,
+        }
+
+    def _build_peer_ctx(self) -> Optional[dict]:
+        """
+        Read the other two engines' last-published basic context. Returns
+        None (whole family missing, not partially zero-filled) unless ALL
+        configured peers have published at least once — partial cross-asset
+        context would be a subtler version of the same fake-data problem
+        H-13 was about.
+        """
+        peer_ctx = {}
+        for prefix in self.peer_prefixes:
+            peer_symbol = next((s for s in ASSETS if s.split("/")[0].lower() == prefix), None)
+            peer_engine = engines.get(peer_symbol) if peer_symbol else None
+            if not peer_engine or not peer_engine.latest_basic_ctx:
+                return None
+            peer_ctx[prefix] = peer_engine.latest_basic_ctx
+        return peer_ctx
+
     def _run_prediction(self, confirm, loop):
         if not self.model_long or not self.model_short or len(self.candles) < 50:
             return
         try:
-            feats = build_features(self.candles)
+            funding_ctx = self._build_funding_ctx()
+            peer_ctx = self._build_peer_ctx()
+            feats = build_features(self.candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx)
+
+            # Publish this engine's own basic context for siblings to read as
+            # cross-asset peer context on their next tick.
+            last_basic = feats.iloc[-1]
+            self.latest_basic_ctx = {
+                "return_1": float(last_basic["log_return_1"]),
+                "return_3": float(last_basic["log_return_3"]),
+                "trend": float(last_basic["trend_direction"]),
+                "volume_block": float(last_basic["volume_block_strength"]),
+            }
 
             # optional derived features
             if "fvg_bullish_strength" in self.feature_names and "fvg_bullish_strength" not in feats.columns:
