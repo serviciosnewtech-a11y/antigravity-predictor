@@ -2549,11 +2549,78 @@ window.syncObjectTree = function() {
     if (chatMessagesContainer) {
       chatMessagesContainer.innerHTML = `
         <div class="chat-msg system">
-          <div class="msg-header"><span class="msg-sender system">Hermes</span><span>Just now</span></div>
-          <div>Advisory chat is disabled-ready on /api/chat and replies only when a real Hermes/Ollama proxy is configured. If unavailable, this panel shows explicit unavailable.</div>
+          <div class="msg-header"><span class="msg-sender system">Hermes Tutor</span><span>Just now</span></div>
+          <div>Ask me to explain a signal, a feature-parity gate, or (when you want it) advise on threshold/performance tweaks — I can't execute anything, only talk. Replies only when a real Hermes/Ollama proxy is configured (see /api/chat/status); otherwise this panel shows an explicit unavailable message.</div>
         </div>
       `;
     }
+    initTutorChat();
+  }
+
+  // ── Hermes Tutor chat panel (widget-chats) ──────────────────────────────
+  // Separate persona/endpoint from the floating hermesChat() widget below:
+  // this one hits /api/tutor-chat, not /api/chat. No execution tools are
+  // wired to either endpoint server-side — this is a UI-level convenience
+  // separation, not the safety boundary (the safety boundary is that the
+  // backend never exposes tool-calling to the LLM at all).
+  let tutorHistory = [];
+  const TUTOR_HISTORY_MAX = 20;
+  let tutorPending = false;
+
+  function tutorAppendMsg(role, text) {
+    if (!chatMessagesContainer) return;
+    const sender = role === "user" ? "You" : "Hermes Tutor";
+    const div = document.createElement("div");
+    div.className = "chat-msg" + (role === "user" ? " user" : " system");
+    div.innerHTML = `
+      <div class="msg-header"><span class="msg-sender ${role === "user" ? "user" : "system"}">${sender}</span><span>${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+      <div></div>
+    `;
+    div.querySelector("div:last-child").textContent = text;
+    chatMessagesContainer.appendChild(div);
+    chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+  }
+
+  async function tutorSend(message) {
+    if (tutorPending || !message || !message.trim()) return;
+    tutorPending = true;
+    tutorAppendMsg("user", message);
+    tutorHistory.push({ role: "user", content: message });
+
+    try {
+      const { data } = await fetchJsonWithFallback(`/api/tutor-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          symbol: state.activeSymbol,
+          language: (localStorage.getItem("hermes_chat_lang") || "en"),
+          history: tutorHistory.slice(-TUTOR_HISTORY_MAX - 1, -1),
+        }),
+      });
+      const reply = data.reply || "(no response)";
+      tutorAppendMsg("assistant", reply);
+      tutorHistory.push({ role: "assistant", content: reply });
+      if (tutorHistory.length > TUTOR_HISTORY_MAX) tutorHistory = tutorHistory.slice(-TUTOR_HISTORY_MAX);
+    } catch (err) {
+      tutorAppendMsg("assistant", `⚠ Tutor unavailable: ${err.message}`);
+    } finally {
+      tutorPending = false;
+    }
+  }
+
+  function initTutorChat() {
+    if (!chatSendBtn || !chatInputField || chatSendBtn.dataset.wired) return;
+    chatSendBtn.dataset.wired = "1";
+    const submit = () => {
+      const msg = chatInputField.value;
+      chatInputField.value = "";
+      tutorSend(msg);
+    };
+    chatSendBtn.addEventListener("click", submit);
+    chatInputField.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submit();
+    });
   }
 
   const alertsLogContainer = document.getElementById("alerts-log-container");

@@ -870,7 +870,30 @@ def get_all_enriched_signals():
     return _enriched_signals
 
 
-# ── Hermes Chat endpoint ──────────────────────────────────────────────────────
+# ── Hermes Chat endpoints ────────────────────────────────────────────────────
+#
+# Two distinct chat surfaces, both proxying to a generic OpenAI-compatible
+# "Hermes proxy" endpoint or Ollama — no execution tools are ever exposed to
+# either; both are pure text in/out.
+#
+#   /api/chat        — operational signal-agent chat ("Hermes"). Terse,
+#                       advisory-only commentary on the current signal.
+#   /api/tutor-chat   — separate tutor persona ("Hermes Tutor"). Explains the
+#                       system, teaches concepts, and — when asked — advises
+#                       on performance/threshold improvements grounded in the
+#                       actual model metrics on disk. Still has zero execution
+#                       access: no tool-calling is wired up for either
+#                       endpoint, so this is a structural guarantee, not a
+#                       prompt-only promise.
+#
+# Backend resolution is env-driven and "standardized" the same way for both:
+# each surface first tries its own TUTOR_-prefixed override, then falls back
+# to the shared HERMES_PROXY_URL / OLLAMA_URL used by the operational chat.
+# This lets an operator point the tutor at the same model (default, zero
+# extra config) or a different one (e.g. a smaller/cheaper/safer model)
+# without touching code. GET /api/chat/status reports what's actually wired
+# for each surface so this doesn't have to be reverse-engineered from env
+# vars — that's the "standard way to know the endpoints" this exposes.
 
 class _ChatMsg(BaseModel):
     role: str   # "user" | "assistant"
@@ -881,6 +904,88 @@ class _ChatRequest(BaseModel):
     symbol: str = "BTC/USDT"
     language: str = "en"
     history: List[_ChatMsg] = []
+
+
+def _backend_config(prefix: str) -> dict:
+    """
+    Resolve (proxy_url, proxy_key, proxy_model, ollama_url, ollama_model) for
+    a given chat surface. `prefix` is "" for the operational chat (reads the
+    base HERMES_PROXY_URL/OLLAMA_URL vars) or "TUTOR_" for the tutor chat
+    (reads TUTOR_HERMES_PROXY_URL/TUTOR_OLLAMA_URL first, falling back to the
+    base vars if unset — so the tutor "just works" off the same backend by
+    default, and only needs its own vars set if you want it separate).
+    """
+    proxy_url = (
+        os.environ.get(f"{prefix}HERMES_PROXY_URL")
+        or os.environ.get("HERMES_PROXY_URL", "")
+    ).rstrip("/")
+    proxy_key = (
+        os.environ.get(f"{prefix}HERMES_PROXY_API_KEY")
+        or os.environ.get("HERMES_PROXY_API_KEY", "local")
+    )
+    proxy_model = (
+        os.environ.get(f"{prefix}HERMES_INFERENCE_MODEL")
+        or os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k")
+    )
+    ollama_url = (
+        os.environ.get(f"{prefix}OLLAMA_URL")
+        or os.environ.get("OLLAMA_URL", "")
+    ).rstrip("/")
+    ollama_model = (
+        os.environ.get(f"{prefix}OLLAMA_MODEL")
+        or os.environ.get("OLLAMA_MODEL", "llama3.2")
+    )
+    return {
+        "proxy_url": proxy_url, "proxy_key": proxy_key, "proxy_model": proxy_model,
+        "ollama_url": ollama_url, "ollama_model": ollama_model,
+    }
+
+
+def _call_llm_backend(system_ctx: str, message: str, history: List[_ChatMsg], cfg: dict) -> Optional[dict]:
+    """
+    Shared backend-calling logic for both chat surfaces. Tries the Hermes
+    proxy first, then Ollama. Returns a reply dict on success, or None if
+    neither backend is configured/reachable — callers turn that into an
+    honest 503, never a scripted fallback reply.
+    """
+    messages_tail = [{"role": h.role, "content": h.content} for h in history[-8:]]
+
+    if cfg["proxy_url"]:
+        try:
+            messages = [{"role": "system", "content": system_ctx}] + messages_tail
+            messages.append({"role": "user", "content": message})
+            resp = requests.post(
+                f"{cfg['proxy_url']}/chat/completions",
+                json={"model": cfg["proxy_model"], "messages": messages, "stream": False},
+                headers={"Authorization": f"Bearer {cfg['proxy_key']}"},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                choices = resp.json().get("choices", [])
+                if choices and "message" in choices[0]:
+                    reply = choices[0]["message"].get("content", "").strip()
+                    if reply:
+                        return {"reply": reply, "source": "hermes_proxy"}
+        except Exception as e:
+            logger.warning(f"[chat] Hermes Proxy unavailable: {e}")
+
+    if cfg["ollama_url"]:
+        try:
+            messages = [{"role": "system", "content": system_ctx}] + messages_tail
+            messages.append({"role": "user", "content": message})
+            resp = requests.post(
+                f"{cfg['ollama_url']}/api/chat",
+                json={"model": cfg["ollama_model"], "messages": messages, "stream": False},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                reply = resp.json().get("message", {}).get("content", "").strip()
+                if reply:
+                    return {"reply": reply, "source": "ollama"}
+        except Exception as e:
+            logger.warning(f"[chat] Ollama unavailable: {e}")
+
+    return None
 
 
 @app.post("/api/chat")
@@ -926,68 +1031,15 @@ async def hermes_chat(req: _ChatRequest):
         + f"You do NOT execute trades. Keep responses under 3 sentences."
     )
 
-    # ── Try HERMES Proxy first ───────────────────────────────────────────────
-    hermes_proxy_url = os.environ.get("HERMES_PROXY_URL", "").rstrip("/")
-    if hermes_proxy_url:
-        try:
-            messages = [{"role": "system", "content": system_ctx}]
-            for h in req.history[-8:]:
-                messages.append({"role": h.role, "content": h.content})
-            messages.append({"role": "user", "content": req.message})
-            resp = requests.post(
-                f"{hermes_proxy_url}/chat/completions",
-                json={
-                    "model": os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k"),
-                    "messages": messages,
-                    "stream": False,
-                },
-                headers={"Authorization": f"Bearer {os.environ.get('HERMES_PROXY_API_KEY', 'local')}"},
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                choices = resp.json().get("choices", [])
-                if choices and "message" in choices[0]:
-                    reply = choices[0]["message"].get("content", "").strip()
-                    if reply:
-                        return {
-                            "reply": reply,
-                            "source": "hermes_proxy",
-                            "signal": signal,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-        except Exception as e:
-            logger.warning(f"[hermes-chat] Hermes Proxy unavailable: {e}")
+    result = _call_llm_backend(system_ctx, req.message, req.history, _backend_config(""))
+    if result:
+        return {
+            "reply": result["reply"],
+            "source": result["source"],
+            "signal": signal,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
-    # ── Try Ollama second ───────────────────────────────────────────────────────
-    ollama_url = os.environ.get("OLLAMA_URL", "").rstrip("/")
-    if ollama_url:
-        try:
-            messages = [{"role": "system", "content": system_ctx}]
-            for h in req.history[-8:]:
-                messages.append({"role": h.role, "content": h.content})
-            messages.append({"role": "user", "content": req.message})
-            resp = requests.post(
-                f"{ollama_url}/api/chat",
-                json={
-                    "model": os.environ.get("OLLAMA_MODEL", "llama3.2"),
-                    "messages": messages,
-                    "stream": False,
-                },
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                reply = resp.json().get("message", {}).get("content", "").strip()
-                if reply:
-                    return {
-                        "reply": reply,
-                        "source": "ollama",
-                        "signal": signal,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-        except Exception as e:
-            logger.warning(f"[hermes-chat] Ollama unavailable: {e}")
-
-    # ── Error Handling (No scripted fallback) ──────────────────────────────────
     return JSONResponse(
         status_code=503,
         content={
@@ -996,6 +1048,154 @@ async def hermes_chat(req: _ChatRequest):
             "source": "unavailable",
         },
     )
+
+
+_TUTOR_SYSTEM_PROMPT = """You are Hermes Tutor, the teaching/advisory persona for the Antigravity
+Predictor dashboard. Your job is to help the person using this dashboard
+understand what the system is showing them and why — not to operate the
+system, and not to trade on their behalf.
+
+You have no ability to execute trades, change configuration, restart
+services, or take any action outside this conversation. This is not a
+policy you are choosing to follow — you have literally been given no tools
+to do any of it; only this text conversation exists. If someone asks you to
+place a trade, flip a setting, override a signal, or do anything beyond
+talking, say plainly that you can't (not "I won't" — you're not able to),
+and offer to explain the relevant part of the system instead. Never simulate
+having taken an action or imply an action occurred.
+
+What you should do:
+- Explain the current signal (LONG/SHORT/NEUTRAL/UNAVAILABLE) for whichever
+  asset is in context, what it means, and what confidence level it shows.
+- Explain the model's reasoning surface: which feature families are
+  populated vs. degraded, what that does to prediction quality, and why the
+  system would rather show UNAVAILABLE than guess.
+- When asked for performance-improvement advice, use the real model metrics
+  and thresholds given to you in [Model performance context] below — cite
+  actual numbers, don't invent them. You can suggest specific, concrete
+  changes (e.g. "raise the BTC short threshold back toward the F1-optimal
+  value if you want fewer, higher-conviction signals") but you cannot apply
+  them — say so, and point to which script/config field would need editing.
+- Teach general concepts on request — technical indicators, funding rates,
+  order flow, volatility regimes, position sizing, risk management — at
+  whatever depth the person wants.
+- Be honest about uncertainty. If confidence is low, or a feature family is
+  degraded, or a metric looks weak (e.g. low precision), say so plainly.
+
+What you should never do:
+- Never give direct financial advice framed as an instruction ("buy now",
+  "close this position"). Explain tradeoffs and let the person decide.
+- Never claim to have executed, scheduled, or changed anything.
+- Never claim access to systems, accounts, or data beyond what's included
+  in the context passed to you for this conversation.
+
+Tone: clear, patient, a little informal. Keep answers as short as the
+question allows; expand only when asked for depth."""
+
+
+def _model_performance_context() -> str:
+    """
+    Reads whatever model report/config files exist on disk and summarizes
+    them for the tutor prompt. Missing files are skipped silently (not every
+    deployment will have run every tool) rather than raising — this is
+    advisory context, not a hard dependency.
+    """
+    lines = []
+    models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+    for fname, label in [
+        ("recalibrate_thresholds_report.json", "Current threshold calibration"),
+        ("retrain_live_features_report.json", "Last retrain test metrics"),
+    ]:
+        path = os.path.join(models_dir, fname)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            for model_name, m in data.items():
+                if "actual_fire_rate" in m:
+                    lines.append(
+                        f"{model_name}: entry={m['entry_threshold']} exit={m['exit_threshold']} "
+                        f"fire_rate={m['actual_fire_rate']:.0%}"
+                    )
+                elif "test_auc" in m:
+                    lines.append(
+                        f"{model_name}: test_auc={m['test_auc']:.3f} "
+                        f"test_precision={m['test_precision']:.3f} "
+                        f"fire_rate={m.get('test_fire_rate', 0):.0%}"
+                    )
+        except Exception:
+            continue
+    if not lines:
+        return "No model metrics files found on disk."
+    return "\n".join(lines)
+
+
+@app.post("/api/tutor-chat")
+async def hermes_tutor_chat(req: _ChatRequest):
+    """
+    Hermes Tutor — separate persona from the operational /api/chat. Explains
+    the system and, when asked, advises on performance improvements using
+    real metrics — but cannot execute anything (no tools wired to either
+    endpoint). Same honest-503-if-unconfigured behavior as /api/chat.
+    """
+    sym = req.symbol if req.symbol in engines else "BTC/USDT"
+    eng = engines[sym]
+
+    with eng.lock:
+        signal     = eng.latest_signal
+        long_prob  = eng.latest_prediction_long
+        short_prob = eng.latest_prediction_short
+
+    lang = "es" if str(req.language).lower().startswith("es") else "en"
+    language_rule = (
+        "Respond in Spanish. " if lang == "es" else "Respond in English. "
+    )
+
+    system_ctx = (
+        _TUTOR_SYSTEM_PROMPT
+        + f"\n\n[Live signal context]\nAsset in view: {sym}. Current signal: {signal}. "
+        + f"long_prob={long_prob:.4f}, short_prob={short_prob:.4f}."
+        + f"\n\n[Model performance context]\n{_model_performance_context()}"
+        + f"\n\n[Language]\n{language_rule}"
+    )
+
+    result = _call_llm_backend(system_ctx, req.message, req.history, _backend_config("TUTOR_"))
+    if result:
+        return {
+            "reply": result["reply"],
+            "source": result["source"],
+            "signal": signal,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "agent_unavailable",
+            "message": "Tutor agent backend unavailable or disabled",
+            "source": "unavailable",
+        },
+    )
+
+
+@app.get("/api/chat/status")
+def chat_status():
+    """
+    Standardized discovery endpoint: reports which backend (if any) each
+    chat surface currently resolves to, without exposing secrets. Lets an
+    operator confirm what's actually wired without reading env vars/code.
+    """
+    def _describe(prefix: str) -> dict:
+        cfg = _backend_config(prefix)
+        if cfg["proxy_url"]:
+            return {"configured": True, "backend": "hermes_proxy", "endpoint": cfg["proxy_url"], "model": cfg["proxy_model"]}
+        if cfg["ollama_url"]:
+            return {"configured": True, "backend": "ollama", "endpoint": cfg["ollama_url"], "model": cfg["ollama_model"]}
+        return {"configured": False, "backend": None, "endpoint": None, "model": None}
+
+    return {
+        "advisory_chat": {"route": "/api/chat", **_describe("")},
+        "tutor_chat": {"route": "/api/tutor-chat", **_describe("TUTOR_")},
+    }
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
