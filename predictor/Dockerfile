@@ -11,9 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY predictor/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# App source — predictor_server.py imports only stdlib + the deps above.
-# It does NOT import lgbm_poc or signal_agent, so neither is copied/installed.
+# App source — predictor_server.py imports only stdlib + the deps above,
+# plus feature_gate.py (H-13 P1 fail-loud parity gate). It does NOT import
+# lgbm_poc or signal_agent, so neither is copied/installed.
 COPY src/predictor_server.py  src/predictor_server.py
+COPY src/feature_gate.py      src/feature_gate.py
 COPY config.json              src/config.json
 COPY dashboard/               dashboard/
 

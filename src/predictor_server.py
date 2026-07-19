@@ -18,6 +18,8 @@ from loguru import logger
 import websockets
 from typing import Optional, List
 
+from feature_gate import evaluate_feature_parity, format_gate_log_summary
+
 # ── Config ───────────────────────────────────────────────────────────────────
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 try:
@@ -240,6 +242,9 @@ class AssetEngine:
         self.feature_names: list[str] = []
         self.missing_features: list[str] = []
         self.degraded = False
+        self.feature_gate_result = None          # last ParityResult.to_dict(), for diagnostics
+        self.inference_blocked_count = 0          # cumulative count, for observability
+        self.last_gate_evaluated_at: float | None = None
         self.candles: list[dict] = []
         self.latest_prediction_long  = 0.0
         self.latest_prediction_short = 0.0
@@ -305,20 +310,68 @@ class AssetEngine:
             if "fvg_bearish_strength" in self.feature_names and "fvg_bearish_strength" not in feats.columns:
                 feats["fvg_bearish_strength"] = feats["fvg_size_atr"] * feats["bearish_fvg_present"]
 
-            missing = [col for col in self.feature_names if col not in feats.columns]
-            if missing != self.missing_features:
-                self.missing_features = missing
-                if missing:
-                    logger.warning(f"[{self.symbol}] Zero-filling {len(missing)} missing model features: {missing}")
-                else:
-                    logger.success(f"[{self.symbol}] All model features present.")
-            self.degraded = bool(missing)
-
+            # ── H-13 fail-loud feature parity gate ─────────────────────────
+            # Build the row that WOULD be scored (the last candle), then
+            # judge it against the model's authoritative feature_names
+            # before ever calling predict(). Missing/invalid/stale trained
+            # features are never replaced with 0.0 — they block inference.
+            last_row = feats.iloc[-1]
+            last_time = last_row["time"]
+            source_ts = (
+                last_time.timestamp() if hasattr(last_time, "timestamp") else float(last_time)
+            )
+            row_values = {}
             for col in self.feature_names:
-                if col not in feats.columns:
-                    feats[col] = 0.0
+                if col in feats.columns:
+                    row_values[col] = last_row[col]
+                else:
+                    row_values[col] = None  # absent -> MISSING, not zero-filled
 
-            X = feats[self.feature_names].fillna(0.0).replace([pd.NA, float("inf"), float("-inf")], 0.0).astype(float)
+            gate = evaluate_feature_parity(
+                self.feature_names,
+                row_values,
+                stale_features=None,   # no live source-freshness wiring approved/connected yet (P2-P4 pending)
+                source_timestamp=source_ts,
+            )
+            self.feature_gate_result = gate.to_dict()
+            self.last_gate_evaluated_at = time.time()
+
+            gate_changed = (gate.missing != self.missing_features) or (not gate.parity_ok) != self.degraded
+            self.missing_features = list(gate.missing)
+            self.degraded = not gate.parity_ok
+
+            if gate_changed or not gate.parity_ok:
+                log_fn = logger.warning if not gate.parity_ok else logger.success
+                log_fn(f"[{self.symbol}] {format_gate_log_summary(gate)}")
+
+            if not gate.parity_ok:
+                # Fail loud: no model call, no BUY/SELL/NEUTRAL/EXIT signal.
+                self.inference_blocked_count += 1
+                old_sig = self.latest_signal
+                self.latest_signal = "UNAVAILABLE"
+                if confirm and old_sig != self.latest_signal:
+                    logger.warning(
+                        f"[{self.symbol}] Signal UNAVAILABLE — inference blocked: {gate.blocked_reason}"
+                    )
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast({
+                        "type": "tick",
+                        "symbol": self.symbol,
+                        "candle": self.candles[-1],
+                        "prediction_long":  self.latest_prediction_long,
+                        "prediction_short": self.latest_prediction_short,
+                        "signal": self.latest_signal,
+                        "position": self.position,
+                        "degraded": self.degraded,
+                        "missing_features": self.missing_features,
+                        "feature_gate": self.feature_gate_result,
+                        "stats": self._stats(),
+                    }),
+                    loop,
+                )
+                return
+
+            X = feats[self.feature_names].astype(float)
             self.latest_prediction_long  = float(self.model_long.predict(X)[-1])
             self.latest_prediction_short = float(self.model_short.predict(X)[-1])
 
@@ -353,6 +406,7 @@ class AssetEngine:
                     "position": self.position,
                     "degraded": self.degraded,
                     "missing_features": self.missing_features,
+                    "feature_gate": self.feature_gate_result,
                     "stats": self._stats(),
                 }),
                 loop,
@@ -446,6 +500,9 @@ class AssetEngine:
                 "position": self.position,
                 "degraded": self.degraded,
                 "missing_features": list(self.missing_features),
+                "feature_gate": self.feature_gate_result,
+                "inference_blocked_count": self.inference_blocked_count,
+                "last_gate_evaluated_at": self.last_gate_evaluated_at,
                 "candles": list(self.candles),
                 "trades": list(self.trades_history),
                 "stats": self._stats(),
@@ -682,6 +739,8 @@ def get_status(symbol: Optional[str] = Query(default=None)):
             "position": snap["position"],
             "degraded": snap["degraded"],
             "missing_features": snap["missing_features"],
+            "feature_gate": snap["feature_gate"],
+            "inference_blocked_count": snap["inference_blocked_count"],
             "stats": snap["stats"],
         }
     # Return summary for all assets
@@ -697,10 +756,39 @@ def get_status(symbol: Optional[str] = Query(default=None)):
                 "position": eng.position,
                 "degraded": eng.degraded,
                 "missing_features": eng.missing_features,
+                "inference_blocked_count": eng.inference_blocked_count,
                 "stats": eng._stats(),
             } for sym, eng in engines.items()
         }
     }
+
+
+@app.get("/api/feature-parity/{symbol}")
+def get_feature_parity(symbol: str):
+    """H-13 diagnostic endpoint (P1 observability requirement).
+
+    Exposes expected/populated feature counts, missing/invalid/stale
+    feature names, per-family status, whether inference is currently
+    blocked, and the timestamp of the source candle used for the last
+    gate evaluation. No secrets or credentials are exposed here.
+    """
+    sym = symbol.replace("_", "/")
+    sym = sym if sym in engines else symbol
+    if sym not in engines:
+        raise HTTPException(status_code=404, detail=f"Unknown asset: {symbol}")
+    eng = engines[sym]
+    with eng.lock:
+        gate = eng.feature_gate_result
+        return {
+            "symbol": sym,
+            "expected_features": len(eng.feature_names),
+            "gate": gate,
+            "degraded": eng.degraded,
+            "current_signal": eng.latest_signal,
+            "inference_blocked": eng.degraded,
+            "inference_blocked_count": eng.inference_blocked_count,
+            "last_gate_evaluated_at": eng.last_gate_evaluated_at,
+        }
 
 @app.get("/api/candles")
 def get_candles(symbol: Optional[str] = Query(default="BTC/USDT"), timeframe: Optional[str] = Query(default=None), limit: int = Query(default=300)):
