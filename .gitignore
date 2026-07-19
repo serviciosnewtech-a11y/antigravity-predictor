@@ -11,8 +11,18 @@ __pycache__/
 venv/
 src/btc_lightgbm_poc.egg-info/
 
-# Runtime data
-data/
+# Runtime data — data/ is excluded wholesale EXCEPT data/macro/*.parquet:
+# those are small (~50KB each), slow-changing (daily OHLCV), fetched from a
+# third-party API (yfinance) that can be flaky/rate-limited, and required
+# for the dashboard's XAU/USD macro panel + /api/market-tickers to work at
+# all. Shipping them pre-populated means a fresh deployment doesn't 503 on
+# gold/oil/dxy/spx/vix until someone remembers to run fetch_macro.py.
+# (git requires unignoring each parent level, not just the leaf pattern —
+# see data/* / data/macro/* below.)
+data/*
+!data/macro/
+data/macro/*
+!data/macro/*.parquet
 *.log
 logs/
 forge_data/

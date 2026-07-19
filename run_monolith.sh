@@ -84,6 +84,19 @@ trap cleanup INT TERM EXIT
 echo "[monolith] Syncing config.json -> src/config.json …"
 cp "$SCRIPT_DIR/config.json" "$SRC_DIR/config.json"
 
+# ── Refresh macro data (gold/oil/dxy/spx/vix), best-effort ──────────────────
+# data/macro/*.parquet ships pre-populated in the deployment package (small,
+# daily OHLCV, committed to git despite data/ being otherwise gitignored —
+# see .gitignore's comment). This refresh keeps it from going stale on a
+# long-running deployment. It's genuinely best-effort: yfinance is a
+# third-party scrape that can rate-limit or be briefly unreachable, and
+# predictor_server.py's /api/market-tickers already degrades gracefully
+# (rate-limited warning log, not a crash) if the file is missing or stale —
+# so this must never block or fail the overall launch.
+echo "[monolith] Refreshing macro data (gold/oil/dxy/spx/vix), best-effort…"
+( cd "$SCRIPT_DIR" && timeout 20s "$PYTHON" src/fetch_macro.py --data-dir data/macro --days 730 \
+    || echo "[monolith] Macro refresh skipped (offline or yfinance unavailable) — using existing data/macro/*.parquet if present." ) &
+
 # ── Predictor (CWD = repo root) ──────────────────────────────────────────────
 echo "[monolith] Starting Predictor on :18910 …"
 cd "$SCRIPT_DIR"

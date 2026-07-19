@@ -62,8 +62,29 @@ def _required_col(df: pd.DataFrame, *names: str) -> str:
             return lookup[name.lower()]
     raise HTTPException(status_code=503, detail=f"Gold macro feed missing column: {names[0]}")
 
+# In-memory cache for the gold parquet: this is daily OHLCV (at most one new
+# row per day), but was previously being re-read from disk and re-parsed on
+# every single call — and this function is called from /api/market-tickers,
+# which the dashboard hits on every websocket tick (multiple times a
+# second across 3 assets). A 5-minute cache eliminates that redundant I/O
+# without ever serving data staler than the source file itself updates.
+_GOLD_CACHE: dict = {"rows": None, "loaded_at": 0.0}
+_GOLD_CACHE_TTL_S = 300.0
+
+# Rate-limits the "unavailable" warning so a missing/broken feed logs once
+# per window instead of once per tick (previously: effectively every
+# websocket update, i.e. a warning-log flood). The feed being down is worth
+# knowing about; the same warning dozens of times a minute is not.
+_GOLD_WARN_STATE: dict = {"last_warned_at": 0.0, "suppressed_count": 0}
+_GOLD_WARN_INTERVAL_S = 300.0
+
+
 def fetch_gold_daily_candles(limit: int = 300) -> list[dict]:
-    """Return real daily Gold candles from the mounted macro dataset."""
+    """Return real daily Gold candles from the mounted macro dataset (cached, see _GOLD_CACHE above)."""
+    now = time.time()
+    if _GOLD_CACHE["rows"] is not None and (now - _GOLD_CACHE["loaded_at"]) < _GOLD_CACHE_TTL_S:
+        return _GOLD_CACHE["rows"][-limit:]
+
     if not os.path.exists(GOLD_PARQUET_PATH):
         raise HTTPException(status_code=503, detail="Gold macro feed unavailable")
     df = pd.read_parquet(GOLD_PARQUET_PATH).sort_index()
@@ -97,6 +118,8 @@ def fetch_gold_daily_candles(limit: int = 300) -> list[dict]:
             })
         except Exception:
             continue
+    _GOLD_CACHE["rows"] = rows
+    _GOLD_CACHE["loaded_at"] = now
     return rows[-max(1, min(limit, 1000)):]
 
 # ── WebSocket Connection Manager ─────────────────────────────────────────────
@@ -674,7 +697,15 @@ def get_market_tickers():
                 "source": "macro_gold_parquet",
             })
     except Exception as exc:
-        logger.warning(f"Gold macro ticker unavailable: {exc}")
+        now = time.time()
+        if (now - _GOLD_WARN_STATE["last_warned_at"]) >= _GOLD_WARN_INTERVAL_S:
+            suppressed = _GOLD_WARN_STATE["suppressed_count"]
+            suffix = f" ({suppressed} further occurrences suppressed in the last {int(_GOLD_WARN_INTERVAL_S)}s)" if suppressed else ""
+            logger.warning(f"Gold macro ticker unavailable: {exc}{suffix}")
+            _GOLD_WARN_STATE["last_warned_at"] = now
+            _GOLD_WARN_STATE["suppressed_count"] = 0
+        else:
+            _GOLD_WARN_STATE["suppressed_count"] += 1
     return {"source": "bybit+macro", "assets": out}
 
 @app.get("/api/news")
