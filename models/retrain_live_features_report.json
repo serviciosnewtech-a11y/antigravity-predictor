@@ -1,0 +1,116 @@
+{
+  "model_btc_long": {
+    "direction": "long",
+    "entry_threshold": 0.06999051619914703,
+    "exit_threshold": 0.056,
+    "feature_count": 41,
+    "symbol": "BTC/USDT",
+    "test_auc": 0.6675777109296663,
+    "test_fire_rate": 0.44930555555555557,
+    "test_precision": 0.10123647604327667,
+    "test_rows": 2880,
+    "train_rows": 13437,
+    "valid_metrics": {
+      "f1": 0.1585518102372035,
+      "fire_rate": 0.4901007294199375,
+      "precision": 0.09000708717221828,
+      "recall": 0.6649214659685864
+    },
+    "valid_rows": 2879
+  },
+  "model_btc_short": {
+    "direction": "short",
+    "entry_threshold": 0.07865547312806566,
+    "exit_threshold": 0.0629,
+    "feature_count": 41,
+    "symbol": "BTC/USDT",
+    "test_auc": 0.6356067912252418,
+    "test_fire_rate": 0.4107638888888889,
+    "test_precision": 0.10312764158918004,
+    "test_rows": 2880,
+    "train_rows": 13437,
+    "valid_metrics": {
+      "f1": 0.22586750788643534,
+      "fire_rate": 0.459881903438694,
+      "precision": 0.1351963746223565,
+      "recall": 0.685823754789272
+    },
+    "valid_rows": 2879
+  },
+  "model_eth_long": {
+    "direction": "long",
+    "entry_threshold": 0.10257596728325263,
+    "exit_threshold": 0.0821,
+    "feature_count": 41,
+    "symbol": "ETH/USDT",
+    "test_auc": 0.5625155525080321,
+    "test_fire_rate": 0.35868055555555556,
+    "test_precision": 0.1181026137463698,
+    "test_rows": 2880,
+    "train_rows": 13437,
+    "valid_metrics": {
+      "f1": 0.2070452911574407,
+      "fire_rate": 0.3900659951372004,
+      "precision": 0.12822796081923418,
+      "recall": 0.5373134328358209
+    },
+    "valid_rows": 2879
+  },
+  "model_eth_short": {
+    "direction": "short",
+    "entry_threshold": 0.1145561963069006,
+    "exit_threshold": 0.0916,
+    "feature_count": 41,
+    "symbol": "ETH/USDT",
+    "test_auc": 0.6012696696562116,
+    "test_fire_rate": 0.3597222222222222,
+    "test_precision": 0.13127413127413126,
+    "test_rows": 2880,
+    "train_rows": 13437,
+    "valid_metrics": {
+      "f1": 0.2602280348759222,
+      "fire_rate": 0.3900659951372004,
+      "precision": 0.17275155832591274,
+      "recall": 0.5271739130434783
+    },
+    "valid_rows": 2879
+  },
+  "model_sol_long": {
+    "direction": "long",
+    "entry_threshold": 0.11788443678629054,
+    "exit_threshold": 0.0943,
+    "feature_count": 41,
+    "symbol": "SOL/USDT",
+    "test_auc": 0.5885717323572139,
+    "test_fire_rate": 0.240625,
+    "test_precision": 0.15728715728715728,
+    "test_rows": 2880,
+    "train_rows": 13437,
+    "valid_metrics": {
+      "f1": 0.21273031825795644,
+      "fire_rate": 0.31006944444444445,
+      "precision": 0.1422172452407615,
+      "recall": 0.4219269102990033
+    },
+    "valid_rows": 2880
+  },
+  "model_sol_short": {
+    "direction": "short",
+    "entry_threshold": 0.11921860165951684,
+    "exit_threshold": 0.0954,
+    "feature_count": 41,
+    "symbol": "SOL/USDT",
+    "test_auc": 0.5632188365398214,
+    "test_fire_rate": 0.4670138888888889,
+    "test_precision": 0.1382899628252788,
+    "test_rows": 2880,
+    "train_rows": 13437,
+    "valid_metrics": {
+      "f1": 0.27574563871693863,
+      "fire_rate": 0.4701388888888889,
+      "precision": 0.1809453471196455,
+      "recall": 0.5791962174940898
+    },
+    "valid_rows": 2880
+  }
+}

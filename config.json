@@ -9,39 +9,41 @@
     "BTC/USDT": {
       "model_long_path":  "models/model_btc_long.txt",
       "model_short_path": "models/model_btc_short.txt",
-      "buy_threshold":        0.1898,
-      "exit_threshold":       0.1537,
-      "sell_threshold":       0.2568,
-      "exit_short_threshold": 0.1981,
+      "buy_threshold":        0.0700,
+      "exit_threshold":       0.0560,
+      "sell_threshold":       0.0787,
+      "exit_short_threshold": 0.0629,
       "tp_atr_mult":    1.5,
       "sl_atr_mult":    1.0,
       "spread_offset_pct": 0.0002,
-      "max_candles_held": 4
+      "max_candles_held": 4,
+      "_note": "H-13 retrain 2026-07-19: model+thresholds replaced to match the 41 live-computable features (primary_basic + primary_structure_smc) instead of the original 126-feature schema. F1-maximized thresholds on a time-ordered validation split — a fast first-pass calibration, not a proper walk-forward/PAPER_BASELINE result. Re-calibrate once that window runs. See models/retrain_live_features_report.json for test-set metrics (test_auc=0.67 long / 0.64 short)."
     },
     "ETH/USDT": {
       "model_long_path":  "models/model_eth_long.txt",
       "model_short_path": "models/model_eth_short.txt",
-      "buy_threshold":        0.1934,
-      "exit_threshold":       0.1701,
-      "sell_threshold":       0.2149,
-      "exit_short_threshold": 0.1886,
+      "buy_threshold":        0.1026,
+      "exit_threshold":       0.0821,
+      "sell_threshold":       0.1146,
+      "exit_short_threshold": 0.0916,
       "tp_atr_mult":    1.5,
       "sl_atr_mult":    1.0,
       "spread_offset_pct": 0.0002,
-      "max_candles_held": 4
+      "max_candles_held": 4,
+      "_note": "H-13 retrain 2026-07-19 — see BTC/USDT note. test_auc=0.56 long / 0.60 short."
     },
     "SOL/USDT": {
       "model_long_path":  "models/model_sol_long.txt",
       "model_short_path": "models/model_sol_short.txt",
-      "buy_threshold":        9.9999,
-      "exit_threshold":       9.9999,
-      "sell_threshold":       0.2281,
-      "exit_short_threshold": 0.2060,
+      "buy_threshold":        0.1179,
+      "exit_threshold":       0.0943,
+      "sell_threshold":       0.1192,
+      "exit_short_threshold": 0.0954,
       "tp_atr_mult":    1.5,
       "sl_atr_mult":    1.0,
       "spread_offset_pct": 0.0003,
       "max_candles_held": 4,
-      "_note": "SOL long disabled — win rate below 40% breakeven at all thresholds. Short only."
+      "_note": "H-13 retrain 2026-07-19 — see BTC/USDT note. SOL long re-enabled: the prior 'disabled, short only' call was based on the old 126-feature model's backtest and doesn't automatically carry over to this retrained model. Not independently re-validated against a breakeven backtest — re-check this before trusting it live. test_auc=0.59 long / 0.56 short."
     }
   }
 }

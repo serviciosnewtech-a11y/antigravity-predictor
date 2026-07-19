@@ -46,3 +46,7 @@ src/config.json
 
 # Sentinel written by retrain_all.sh in Docker mode
 models/.retrain_complete
+
+# Cached raw OHLCV parquet used by tools/retrain_live_features.py —
+# regeneratable from the exchange, not a source file.
+.retrain_cache/
