@@ -1,0 +1,217 @@
+{
+  "$schema_version": "1.0.0",
+  "document_type": "install_and_implementation_dossier",
+  "purpose": "Machine-readable spec for a remote Hermes agent to (1) deploy the Antigravity Predictor bare-metal package and (2) create/wire the secondary Hermes tutor agent profile, with zero guesswork on env vars, endpoints, contracts, or verification steps.",
+  "generated_at": "2026-07-19T15:58:00Z",
+  "generated_by": "Claude (Cowork session), on request of operator Luis E. Wilson",
+  "source": {
+    "repo": "https://github.com/serviciosnewtech-a11y/antigravity-predictor",
+    "branch": "main",
+    "commit": "e0a83e981e8b6750a95f07cde467f270ce5c284a",
+    "commit_note": "4 commits ahead of last-known origin/main (f8c33f0). Not yet pushed — gh auth not configured on the build host. Push is an operator action, out of scope for this dossier.",
+    "commit_message_summary": "feat: add Hermes Tutor chat (no-execution advisory persona) + chat backend status endpoint"
+  },
+
+  "deployment_package": {
+    "filename": "antigravity-predictor-deploy-20260719T155532Z.tar.gz",
+    "sha256": "2999f6faa5ca188066e99fac023c60058cbea7d6fc981ccad6bec78ba4004be2",
+    "size_bytes": 474908,
+    "built_from_commit": "e0a83e981e8b6750a95f07cde467f270ce5c284a",
+    "install_command": "tar -xzf antigravity-predictor-deploy-20260719T155532Z.tar.gz && cd antigravity-predictor-deploy-20260719T155532Z && bash start.sh",
+    "install_command_notes": "start.sh is idempotent: locates python3.10-3.13, creates .venv/ if absent (reuses if present), pip installs requirements.txt (no-ops on already-satisfied packages), then execs run_monolith.sh. No manual venv activation or pip step required. Verified end-to-end from three independent clean extractions (no pre-existing .venv, no pre-warmed pip cache) — see verification_log below.",
+    "requirements_file": "requirements.txt (consolidated; every third-party import in the package was grepped and cross-checked; optional/unused-by-default deps listed commented-out with the file that would need them)",
+    "python_version_tested": "3.10.12",
+    "os_tested": "Linux (bash-based scripts; Windows requires WSL)",
+    "network_requirements": [
+      "Outbound to PyPI once, for pip install",
+      "Outbound to Bybit public futures market-data endpoints continuously (read-only, no API key)",
+      "Outbound to whatever LLM backend is configured for chat (see chat_architecture below) — none by default"
+    ]
+  },
+
+  "services": {
+    "predictor": {
+      "port": 18910,
+      "process": "python src/predictor_server.py, CWD = repo root",
+      "health_endpoint": "GET /api/status",
+      "dashboard_endpoint": "GET / (serves dashboard/index.html + app.js + style.css, no build step)",
+      "feature_parity_endpoint": "GET /api/feature-parity/{SYMBOL_WITH_UNDERSCORE}  e.g. /api/feature-parity/BTC_USDT"
+    },
+    "executor": {
+      "port": 18911,
+      "process": "python executor/server.py, CWD = repo root",
+      "health_endpoint": "GET /health",
+      "default_mode": "DRY_RUN=true (no real orders). LIVE_CONFIRM + real exchange API keys required to change this — operator-only action, never automate."
+    },
+    "forge": {
+      "port": 18912,
+      "process": "python -m forge.server, CWD = repo root",
+      "health_endpoint": "GET /health",
+      "storage": "SQLite at forge_data/forge.db (FORGE_DATA_DIR env override), tables auto-created via CREATE TABLE IF NOT EXISTS on startup: candles, trades, strategy_registry"
+    },
+    "signal_agent": {
+      "port": null,
+      "process": "python -m signal_agent.main, CWD = src/",
+      "default_backend": "SA_INFERENCE_BACKEND=disabled (no LLM calls made unless explicitly set to ollama/claude/openai_compatible/hermes_proxy)"
+    }
+  },
+
+  "chat_architecture": {
+    "overview": "Two independent chat surfaces on the predictor service. Neither exposes any tool-calling/function-calling to the LLM backend — this is enforced in code (no tools are constructed or passed in either request payload), not a prompt-only restriction. Both are pure text-in/text-out proxies.",
+
+    "endpoints": {
+      "operational_chat": {
+        "route": "POST /api/chat",
+        "persona_name": "Hermes",
+        "purpose": "Terse advisory commentary on the current live signal for one asset.",
+        "request_schema": {
+          "message": "string, required",
+          "symbol": "string, default 'BTC/USDT', must be one of the configured assets or falls back to BTC/USDT",
+          "language": "string, 'en' or 'es' (anything starting 'es' is treated as Spanish), default 'en'",
+          "history": "array of {role: 'user'|'assistant', content: string}, last 8 used as context"
+        },
+        "success_response_schema": {
+          "reply": "string",
+          "source": "'hermes_proxy' | 'ollama'",
+          "signal": "'LONG' | 'SHORT' | 'NEUTRAL' | 'UNAVAILABLE'",
+          "timestamp": "ISO8601 UTC"
+        },
+        "failure_response": {
+          "http_status": 503,
+          "body": {"error": "agent_unavailable", "message": "Agent backend unavailable or disabled", "source": "unavailable"},
+          "note": "No scripted/fake fallback reply exists. If no backend is reachable, this 503 is returned unconditionally. This is intentional per the project's 'no fake output' rule."
+        },
+        "system_prompt_template": "You are Hermes, the signal intelligence agent for the Antigravity Predictor system. Current state for {symbol}: signal={signal}, long_prob={long_prob:.4f}, short_prob={short_prob:.4f}, position={position_str}, total_trades={total_trades}, win_trades={win_trades}, net_pnl={net_pnl:.2f} USDT. Enriched context: {analyst_note}. {language_rule} Provide concise advisory signal commentary. You do NOT execute trades. Keep responses under 3 sentences.",
+        "code_location": "src/predictor_server.py, function hermes_chat(), lines ~1015-1060 as of commit e0a83e9"
+      },
+
+      "tutor_chat": {
+        "route": "POST /api/tutor-chat",
+        "persona_name": "Hermes Tutor",
+        "purpose": "Separate no-execution teaching/advisory persona. Explains the system's current state and, when explicitly asked, advises on performance/threshold improvements grounded in real model metrics read from disk. This is the 'secondary Hermes agent profile' referenced by the operator — implemented as an isolated system prompt + isolated per-request context (no shared state with the operational chat) rather than a separate OS-level CLI profile, for portability (see design_decision_note below).",
+        "request_schema": "identical to operational_chat request_schema",
+        "success_response_schema": "identical to operational_chat success_response_schema (source will still read 'hermes_proxy' or 'ollama' — the persona distinction is entirely in which system prompt was used server-side, not a new source label)",
+        "failure_response": {
+          "http_status": 503,
+          "body": {"error": "agent_unavailable", "message": "Tutor agent backend unavailable or disabled", "source": "unavailable"}
+        },
+        "system_prompt_full_text": "You are Hermes Tutor, the teaching/advisory persona for the Antigravity\nPredictor dashboard. Your job is to help the person using this dashboard\nunderstand what the system is showing them and why — not to operate the\nsystem, and not to trade on their behalf.\n\nYou have no ability to execute trades, change configuration, restart\nservices, or take any action outside this conversation. This is not a\npolicy you are choosing to follow — you have literally been given no tools\nto do any of it; only this text conversation exists. If someone asks you to\nplace a trade, flip a setting, override a signal, or do anything beyond\ntalking, say plainly that you can't (not \"I won't\" — you're not able to),\nand offer to explain the relevant part of the system instead. Never simulate\nhaving taken an action or imply an action occurred.\n\nWhat you should do:\n- Explain the current signal (LONG/SHORT/NEUTRAL/UNAVAILABLE) for whichever\n  asset is in context, what it means, and what confidence level it shows.\n- Explain the model's reasoning surface: which feature families are\n  populated vs. degraded, what that does to prediction quality, and why the\n  system would rather show UNAVAILABLE than guess.\n- When asked for performance-improvement advice, use the real model metrics\n  and thresholds given to you in [Model performance context] below — cite\n  actual numbers, don't invent them. You can suggest specific, concrete\n  changes (e.g. \"raise the BTC short threshold back toward the F1-optimal\n  value if you want fewer, higher-conviction signals\") but you cannot apply\n  them — say so, and point to which script/config field would need editing.\n- Teach general concepts on request — technical indicators, funding rates,\n  order flow, volatility regimes, position sizing, risk management — at\n  whatever depth the person wants.\n- Be honest about uncertainty. If confidence is low, or a feature family is\n  degraded, or a metric looks weak (e.g. low precision), say so plainly.\n\nWhat you should never do:\n- Never give direct financial advice framed as an instruction (\"buy now\",\n  \"close this position\"). Explain tradeoffs and let the person decide.\n- Never claim to have executed, scheduled, or changed anything.\n- Never claim access to systems, accounts, or data beyond what's included\n  in the context passed to you for this conversation.\n\nTone: clear, patient, a little informal. Keep answers as short as the\nquestion allows; expand only when asked for depth.",
+        "context_injection_per_request": [
+          "Live signal context: asset in view, current signal (LONG/SHORT/NEUTRAL/UNAVAILABLE), long_prob, short_prob",
+          "Model performance context: parsed from models/recalibrate_thresholds_report.json (entry/exit thresholds, actual fire rate per model) and models/retrain_live_features_report.json (test_auc, test_precision, test_fire_rate per model). Missing files are skipped silently, not treated as an error.",
+          "Language rule: 'Respond in Spanish.' or 'Respond in English.'"
+        ],
+        "memory_isolation_property": "No server-side conversation memory exists for either endpoint. Each HTTP request is stateless on the server; the ONLY conversational memory is the 'history' array the caller (dashboard JS) sends back each turn, capped client-side at the last 20 messages, of which the last 8 are forwarded to the LLM as context. This satisfies 'isolated memory' by construction — there is no cross-session, cross-user, or cross-persona memory store on the server to isolate FROM in the first place.",
+        "code_location": "src/predictor_server.py, function hermes_tutor_chat() and _TUTOR_SYSTEM_PROMPT constant and _model_performance_context(), lines ~1105-1230 as of commit e0a83e9"
+      },
+
+      "status_discovery": {
+        "route": "GET /api/chat/status",
+        "purpose": "Standardized way to check what backend each chat surface currently resolves to, without exposing secrets (API keys never appear in the response).",
+        "response_schema": {
+          "advisory_chat": {"route": "/api/chat", "configured": "bool", "backend": "'hermes_proxy'|'ollama'|null", "endpoint": "string|null", "model": "string|null"},
+          "tutor_chat": {"route": "/api/tutor-chat", "configured": "bool", "backend": "'hermes_proxy'|'ollama'|null", "endpoint": "string|null", "model": "string|null"}
+        },
+        "example_response_both_unconfigured": {
+          "advisory_chat": {"route": "/api/chat", "configured": false, "backend": null, "endpoint": null, "model": null},
+          "tutor_chat": {"route": "/api/tutor-chat", "configured": false, "backend": null, "endpoint": null, "model": null}
+        }
+      }
+    },
+
+    "backend_resolution_algorithm": {
+      "description": "Both endpoints resolve their backend identically via _backend_config(prefix) in src/predictor_server.py — prefix is '' for operational chat, 'TUTOR_' for tutor chat.",
+      "precedence_order": [
+        "1. {prefix}HERMES_PROXY_URL (e.g. TUTOR_HERMES_PROXY_URL for tutor) — if set and non-empty, this OpenAI-compatible endpoint is tried first: POST {url}/chat/completions",
+        "2. HERMES_PROXY_URL (unprefixed) — used if the prefixed var above is unset; this is the 'share the operational backend' default path",
+        "3. {prefix}OLLAMA_URL (e.g. TUTOR_OLLAMA_URL) — tried second if no proxy_url resolved from steps 1-2; Ollama-native endpoint: POST {url}/api/chat",
+        "4. OLLAMA_URL (unprefixed) — used if the prefixed var above is unset",
+        "5. If nothing resolves from any of the above: endpoint returns 503 agent_unavailable. No further fallback exists."
+      ],
+      "env_vars": {
+        "HERMES_PROXY_URL": {"applies_to": "both (base)", "example": "http://host.docker.internal:8645/v1", "protocol": "OpenAI-compatible /chat/completions"},
+        "HERMES_PROXY_API_KEY": {"applies_to": "both (base)", "default_if_unset": "local", "sent_as": "Authorization: Bearer {key}"},
+        "HERMES_INFERENCE_MODEL": {"applies_to": "both (base)", "default_if_unset": "gemma4:12b-it-qat-policy-128k"},
+        "OLLAMA_URL": {"applies_to": "both (base)", "example": "http://host.docker.internal:11434", "protocol": "Ollama-native /api/chat"},
+        "OLLAMA_MODEL": {"applies_to": "both (base)", "default_if_unset": "llama3.2"},
+        "TUTOR_HERMES_PROXY_URL": {"applies_to": "tutor only, overrides base", "default_if_unset": "falls back to HERMES_PROXY_URL"},
+        "TUTOR_HERMES_PROXY_API_KEY": {"applies_to": "tutor only, overrides base", "default_if_unset": "falls back to HERMES_PROXY_API_KEY"},
+        "TUTOR_INFERENCE_MODEL": {"applies_to": "tutor only, overrides base", "default_if_unset": "falls back to HERMES_INFERENCE_MODEL"},
+        "TUTOR_OLLAMA_URL": {"applies_to": "tutor only, overrides base", "default_if_unset": "falls back to OLLAMA_URL"},
+        "TUTOR_OLLAMA_MODEL": {"applies_to": "tutor only, overrides base", "default_if_unset": "falls back to OLLAMA_MODEL"}
+      },
+      "config_file": ".env (copy from .env.example, which documents all vars above with inline comments), loaded by run_monolith.sh via `set -a; source .env; set +a` if present, or export directly in the shell/systemd unit before launch"
+    },
+
+    "design_decision_note": "An earlier iteration of this feature (pre-commit, in a working-tree-only prototype named chat_tutor_bridge.py) assumed a dedicated Hermes CLI profile living on the original build host at ~/.hermes/profiles/dashboard-tutor, invoked via subprocess by a standalone bridge process on port 9889. That design was NOT carried into this commit because it is not portable — it hard-depends on a specific CLI binary and profile directory existing on whatever machine runs this package, which a generic bare-metal deployment cannot assume. This dossier's tutor_chat implementation instead reuses the same portable HTTP proxy/Ollama mechanism as the operational chat, satisfying the same requirements (isolated identity via a distinct system prompt, no execution tools, advisory-only) without a host-specific dependency. If the operator specifically wants the CLI-profile architecture reinstated instead of this HTTP-proxy architecture, that is a distinct implementation task, not covered by this dossier."
+  },
+
+  "secondary_agent_profile_requirements": {
+    "note": "This section specifies what ANY backend pointed to by TUTOR_HERMES_PROXY_URL / TUTOR_OLLAMA_URL must satisfy to correctly serve as the 'secondary Hermes tutor profile.' It applies whether that backend is a second Ollama model, a separate OpenAI-compatible deployment, or a dedicated Hermes agent profile/instance exposed over HTTP.",
+    "required_capability": "Must accept either (a) OpenAI-compatible POST {base}/chat/completions with {model, messages, stream:false} and return {choices:[{message:{content}}]}, or (b) Ollama-native POST {base}/api/chat with {model, messages, stream:false} and return {message:{content}}. No other protocol is currently supported by predictor_server.py's _call_llm_backend().",
+    "forbidden_capabilities": [
+      "No tool-calling / function-calling should be enabled on this backend for this use case — predictor_server.py never sends a `tools` field in either request format, so even a tool-capable model will not be invoked to use tools in this flow, but the profile should not be configured to auto-invoke tools/actions independent of what's asked, if the underlying agent framework has such a mode.",
+      "No filesystem, shell, network-request, or code-execution tool access.",
+      "No credentials for the exchange (Bybit), the executor service, or config.json should be reachable by or embedded in this agent's own configuration/prompt.",
+      "No standing/persistent memory of past dashboard sessions beyond what predictor_server.py explicitly sends in the 'history' field of each request (see memory_isolation_property above) — if the backend agent framework has its own independent memory/RAG store, it should be started fresh/empty for this profile, not shared with any operational/trading-capable agent profile."
+    ],
+    "recommended_profile_name": "dashboard-tutor (matches the naming already referenced in the superseded chat_tutor_bridge.py prototype, kept for continuity if a remote agent recognizes that name from prior context)",
+    "recommended_setup_if_using_a_dedicated_LLM_deployment": [
+      "1. Provision a chat-completions-capable model endpoint (local Ollama pull, or a hosted OpenAI-compatible endpoint) with no tools/functions registered.",
+      "2. Confirm it responds correctly to a bare curl test matching the request_schema for whichever protocol it speaks (see verification_checklist below for exact commands).",
+      "3. Set TUTOR_OLLAMA_URL (or TUTOR_HERMES_PROXY_URL + TUTOR_HERMES_PROXY_API_KEY) in .env on the machine running the predictor service to point at it.",
+      "4. Restart the predictor process (Ctrl+C, then bash start.sh again, or restart the systemd unit — see deploy/predictor.service in the package).",
+      "5. Verify via GET /api/chat/status that tutor_chat.configured is true and endpoint/model match what was set.",
+      "6. Verify via a real POST /api/tutor-chat call (see verification_checklist) that a reply is returned, not a 503."
+    ]
+  },
+
+  "verification_checklist": {
+    "note": "Every command below was actually run against this exact commit/package during this build, with actual output recorded. A remote agent can run the same commands to self-verify a new deployment without guessing at expected shapes.",
+    "steps": [
+      {
+        "step": "Confirm predictor is up",
+        "command": "curl -s http://localhost:18910/api/status | python3 -m json.tool",
+        "expected": "JSON with assets.BTC/USDT, ETH/USDT, SOL/USDT each showing degraded:false and a latest_signal of LONG/SHORT/NEUTRAL (not UNAVAILABLE, assuming models loaded correctly)"
+      },
+      {
+        "step": "Confirm feature parity gate passes",
+        "command": "curl -s http://localhost:18910/api/feature-parity/BTC_USDT | python3 -m json.tool",
+        "expected": "gate.parity_status == 'PASS', gate.populated_features == gate.expected_features == 41, gate.blocked_reason == null"
+      },
+      {
+        "step": "Confirm chat backend discovery endpoint",
+        "command": "curl -s http://localhost:18910/api/chat/status | python3 -m json.tool",
+        "expected_when_unconfigured": {"advisory_chat": {"configured": false}, "tutor_chat": {"configured": false}},
+        "expected_when_configured": "configured:true, backend set to 'hermes_proxy' or 'ollama', endpoint and model populated"
+      },
+      {
+        "step": "Confirm operational chat honest-unavailable behavior (before any backend is configured)",
+        "command": "curl -s -w '\\nHTTP:%{http_code}\\n' -X POST http://localhost:18910/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"whats the BTC signal\",\"symbol\":\"BTC/USDT\"}'",
+        "expected": "HTTP 503, body {\"error\":\"agent_unavailable\",\"message\":\"Agent backend unavailable or disabled\",\"source\":\"unavailable\"}"
+      },
+      {
+        "step": "Confirm tutor chat honest-unavailable behavior (before any backend is configured)",
+        "command": "curl -s -w '\\nHTTP:%{http_code}\\n' -X POST http://localhost:18910/api/tutor-chat -H 'Content-Type: application/json' -d '{\"message\":\"how can I improve performance\",\"symbol\":\"BTC/USDT\"}'",
+        "expected": "HTTP 503, body {\"error\":\"agent_unavailable\",\"message\":\"Tutor agent backend unavailable or disabled\",\"source\":\"unavailable\"}"
+      },
+      {
+        "step": "Confirm tutor chat resolves independently from operational chat once both backends are configured",
+        "method": "Point OLLAMA_URL at backend A and TUTOR_OLLAMA_URL at a DIFFERENT backend B, restart, then call both endpoints and confirm each reply/source traces to its own backend.",
+        "actually_tested_this_build": "Two disposable fake Ollama-compatible servers were run on 127.0.0.1:19001 and 127.0.0.1:19002. OLLAMA_URL=http://127.0.0.1:19001 and TUTOR_OLLAMA_URL=http://127.0.0.1:19002 were exported before launch. Result: POST /api/chat returned reply containing '[fake-backend:19001]', POST /api/tutor-chat returned reply containing '[fake-backend:19002]', and GET /api/chat/status correctly reported endpoint 19001 for advisory_chat and 19002 for tutor_chat. Confirms the override mechanism is not guesswork — it was executed and observed."
+      },
+      {
+        "step": "Run automated test suite",
+        "command": ".venv/bin/python -m pytest tests/ -q",
+        "expected": "11 passed (H-13 feature-parity gate tests; unaffected by the chat changes, which are additive and don't touch feature_gate.py)"
+      }
+    ]
+  },
+
+  "honest_caveats": [
+    "Chat will not produce real replies out of the box on a fresh deployment — no LLM backend is bundled or configured by default. This is deliberate (no credentials/models are shipped with the package); an operator or remote agent must supply TUTOR_OLLAMA_URL/TUTOR_HERMES_PROXY_URL or the base equivalents.",
+    "The 'secondary agent profile' as implemented is a system-prompt + env-var-routing distinction, not an OS-level sandboxed agent identity with its own credential/permission boundary enforced by an external framework. The no-execution guarantee comes from predictor_server.py never wiring tool-calling into either request, not from any property of the backend model itself. If the backend LLM is later given tools by some other integration, that would break the guarantee this dossier documents — the guarantee holds only for calls made through /api/chat and /api/tutor-chat as implemented in this commit.",
+    "Model quality feeding the 'performance advice' context is modest (test AUC 0.56-0.67); the tutor will accurately relay these numbers if asked, but the numbers themselves describe a visibility-calibrated demo model, not a validated trading edge.",
+    "This dossier describes commit e0a83e9's state exactly. If predictor_server.py, dashboard/app.js, or dashboard/index.html are modified after this commit, the line-number and code_location references below may drift — the schema/contract fields (routes, request/response shapes, env var names) are the durable source of truth, not the line numbers."
+  ]
+}
