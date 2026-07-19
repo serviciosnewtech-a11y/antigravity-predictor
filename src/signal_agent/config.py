@@ -57,6 +57,9 @@ class SignalAgentConfig:
     hermes_inference_model: str = "operator-approved-model"
     hermes_proxy_api_key: str = "local"
 
+    # Internal service-to-service token for mutating Predictor endpoints.
+    internal_api_token: str = ""
+
     # Assets to monitor (normalised symbols)
     assets: list[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
 
@@ -111,5 +114,7 @@ def load_config() -> SignalAgentConfig:
         cfg.hermes_inference_model = os.environ["HERMES_INFERENCE_MODEL"]
     if os.environ.get("HERMES_PROXY_API_KEY"):
         cfg.hermes_proxy_api_key = os.environ["HERMES_PROXY_API_KEY"]
+    if os.environ.get("INTERNAL_API_TOKEN"):
+        cfg.internal_api_token = os.environ["INTERNAL_API_TOKEN"]
 
     return cfg

@@ -75,9 +75,11 @@ def _post_enriched_signal(asset: str, payload: dict, cfg: SignalAgentConfig) -> 
     # URL-safe asset key: BTC/USDT → BTC_USDT
     asset_key = asset.replace("/", "_")
     try:
+        headers = {"X-Internal-Token": cfg.internal_api_token} if cfg.internal_api_token else {}
         r = requests.post(
             f"{cfg.predictor_url}/api/enriched-signal/{asset_key}",
             json=payload,
+            headers=headers,
             timeout=15,
         )
         r.raise_for_status()

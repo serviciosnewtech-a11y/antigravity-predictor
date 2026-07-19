@@ -8,7 +8,7 @@
 
 **Clone URL:** `https://github.com/serviciosnewtech-a11y/antigravity-predictor.git`
 
-**Verified source commit:** `bce7598eefe29a6f034a0299e5e7fd9a4852e3ce`
+**Verified source:** latest public `main` or the `beta-1` tag after Beta 1 publication.
 
 **Install root:** `~/antigravity-predictor-test/antigravity-predictor`
 
@@ -36,7 +36,7 @@ Stop immediately and report evidence if any of these are true:
 4. Required public entry port is held by an unrelated service and the existing listener is not this app stack:
    - `80`
 5. Any step requires sudo, destructive host changes, wiping unknown directories, firewall changes, package installation, credential entry, or production exchange setup.
-6. The GitHub clone does not resolve to the latest public `main` commit or a specific operator-approved commit.
+6. The GitHub clone does not resolve to the latest public `main`, the `beta-1` tag, or a specific operator-approved commit.
 7. A command fails and the next action is not explicitly covered by this dossier or by `diagnose.sh`.
 
 Do not continue under uncertainty. Return a concise blocker report.

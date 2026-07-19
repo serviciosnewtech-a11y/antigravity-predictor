@@ -27,7 +27,7 @@ from typing import Optional
 
 import ccxt
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel
@@ -38,7 +38,14 @@ API_KEY          = os.getenv("EXCHANGE_API_KEY", "")
 API_SECRET       = os.getenv("EXCHANGE_API_SECRET", "")
 PREDICTOR_URL    = os.getenv("PREDICTOR_URL", "http://localhost:18910")
 PORT             = int(os.getenv("EXECUTOR_PORT", 18911))
-DRY_RUN          = os.getenv("DRY_RUN", "true").lower() in ("1", "true", "yes")
+REQUESTED_DRY_RUN = os.getenv("DRY_RUN", "true").lower() in ("1", "true", "yes")
+LIVE_CONFIRM      = os.getenv("LIVE_CONFIRM", "")
+DRY_RUN           = REQUESTED_DRY_RUN or LIVE_CONFIRM != "I_ACCEPT_LIVE_TRADING"
+INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+DASHBOARD_ORIGINS = [
+    o.strip() for o in os.getenv("DASHBOARD_ORIGINS", "http://localhost,http://127.0.0.1").split(",")
+    if o.strip()
+]
 
 # Execution thresholds — ignore signals below these confidence levels
 MIN_LONG_CONF    = float(os.getenv("MIN_LONG_CONF",  "0.60"))
@@ -112,6 +119,12 @@ def calc_order_size(symbol: str, usdt_amount: float) -> float:
         logger.warning(f"Could not calc order size for {symbol}: {e}")
         return 0.0
 
+def require_internal_token(x_internal_token: str = Header(default="")) -> None:
+    if not INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=503, detail="INTERNAL_API_TOKEN is not configured")
+    if x_internal_token != INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid internal token")
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -119,6 +132,8 @@ async def lifespan(app: FastAPI):
     exchange = build_exchange()
     mode = "DRY RUN" if DRY_RUN else "LIVE"
     logger.info(f"Executor online — exchange={EXCHANGE_ID} mode={mode} port={PORT}")
+    if not REQUESTED_DRY_RUN and DRY_RUN:
+        logger.warning("DRY_RUN=false ignored: LIVE_CONFIRM must equal I_ACCEPT_LIVE_TRADING to allow live trading.")
     if not DRY_RUN and not API_KEY:
         logger.warning("LIVE mode but EXCHANGE_API_KEY not set — orders will fail.")
     yield
@@ -129,7 +144,7 @@ app = FastAPI(title="Antigravity Executor", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=DASHBOARD_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -163,7 +178,7 @@ def positions():
         raise HTTPException(status_code=502, detail=str(e))
 
 @app.post("/execute")
-def execute(req: ExecuteRequest):
+def execute(req: ExecuteRequest, _: None = Depends(require_internal_token)):
     """Execute a signal from the Predictor."""
     min_conf = MIN_LONG_CONF if req.side == "long" else MIN_SHORT_CONF
 
@@ -217,7 +232,7 @@ def execute(req: ExecuteRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/cancel/{symbol:path}")
-def cancel(symbol: str):
+def cancel(symbol: str, _: None = Depends(require_internal_token)):
     """Cancel all open orders for a symbol."""
     if DRY_RUN:
         return {"action": "dry_run", "symbol": symbol}
@@ -232,7 +247,7 @@ def cancel(symbol: str):
         raise HTTPException(status_code=502, detail=str(e))
 
 @app.post("/close/{symbol:path}")
-def close_position(symbol: str):
+def close_position(symbol: str, _: None = Depends(require_internal_token)):
     """Market-close the open position for a symbol."""
     if DRY_RUN:
         return {"action": "dry_run", "symbol": symbol}

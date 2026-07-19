@@ -27,6 +27,8 @@ services:
       - HERMES_PROXY_API_KEY=${HERMES_PROXY_API_KEY:-local}
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1}
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      - DASHBOARD_ORIGINS=${DASHBOARD_ORIGINS:-http://localhost,http://127.0.0.1}
     volumes:
       - ${MODELS_DIR:-./models}:/app/models:ro
       - ${DATA_DIR:-./data}:/app/data:ro
@@ -47,6 +49,10 @@ services:
       - EXCHANGE=${EXCHANGE:-bybit}
       - EXCHANGE_API_KEY=${EXCHANGE_API_KEY:-}
       - EXCHANGE_API_SECRET=${EXCHANGE_API_SECRET:-}
+      - DRY_RUN=${DRY_RUN:-true}
+      - LIVE_CONFIRM=${LIVE_CONFIRM:-}
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      - DASHBOARD_ORIGINS=${DASHBOARD_ORIGINS:-http://localhost,http://127.0.0.1}
       - PREDICTOR_URL=http://predictor:18910
     volumes:
       - ${LOGS_DIR:-./logs}:/app/logs
@@ -89,6 +95,7 @@ services:
       - HERMES_PROXY_URL=${HERMES_PROXY_URL:-http://host.docker.internal:8645/v1}
       - HERMES_INFERENCE_MODEL=${HERMES_INFERENCE_MODEL:-operator-approved-model}
       - HERMES_PROXY_API_KEY=${HERMES_PROXY_API_KEY:-local}
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       # Optional advanced fallbacks only
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1}

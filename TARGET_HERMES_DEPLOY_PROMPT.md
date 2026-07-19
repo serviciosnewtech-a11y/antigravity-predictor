@@ -17,6 +17,7 @@ Steps:
 6. Report only concrete evidence:
    - pwd
    - git rev-parse HEAD
+   - git tag --points-at HEAD || true
    - docker compose ps
    - curl http://localhost/api/status result
    - curl http://localhost/executor/health result

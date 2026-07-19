@@ -21,11 +21,12 @@
 ## Verify before implementing
 
 - [ ] Public repo hygiene/scrub decision: inspect public docs for personal email, internal paths, stale private claims, and operational handoffs.
-- [ ] Executor token auth for mutating routes: verify current routes/callers first; ensure token never reaches frontend JS.
-- [ ] Predictor token auth for mutating/compute endpoints: verify current `/api/chat` and enriched-signal caller flow first.
-- [ ] Live-mode double gate: verify executor live/dry-run handling before patching.
+- [x] Executor token auth for mutating routes: verified no frontend/internal caller currently depends on nginx POST; `/execute`, `/cancel/*`, and `/close/*` are token-gated in repo.
+- [x] Predictor token auth for service mutating endpoint: verified signal_agent is the service caller for enriched-signal; `/api/enriched-signal/*` is token-gated in repo.
+- [ ] Public chat abuse control: `/api/chat` is browser-facing and intentionally not token-gated in Beta 1 so disabled-ready UI keeps returning honest `503 agent_unavailable`; add rate limit/session auth later if chat is enabled publicly.
+- [x] Live-mode double gate: executor now forces dry-run unless `DRY_RUN=false` and `LIVE_CONFIRM=I_ACCEPT_LIVE_TRADING` are both set.
 - [ ] Secret scoping per container: verify which services actually need `.env` values before removing `env_file` broadly.
-- [ ] CORS cleanup: verify dashboard origin and local/LAN deployment modes before tightening.
+- [x] CORS cleanup: default origins now limited to `http://localhost,http://127.0.0.1`, configurable with `DASHBOARD_ORIGINS` for LAN/VPS.
 - [ ] Nginx rate limiting: verify request patterns so polling/WebSocket handshakes are not broken.
 - [ ] WebSocket exposure/auth: verify actual `/ws` route and dashboard behavior after backend port removal.
 - [ ] Persistent execution audit log: verify existing `ExecutionRecord` lifecycle before adding JSONL persistence.

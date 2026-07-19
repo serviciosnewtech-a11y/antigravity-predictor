@@ -34,6 +34,7 @@ models/top_level.txt
 # Temp files
 dashboard/index.html.tmp
 src/__probe_test.txt
+backups/
 
 # Sentinel written by retrain_all.sh in Docker mode
 models/.retrain_complete

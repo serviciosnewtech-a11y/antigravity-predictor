@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from datetime import datetime, timezone
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import Depends, FastAPI, Header, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -462,9 +462,21 @@ engines: dict[str, AssetEngine] = {
 _enriched_signals: dict[str, dict] = {}
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────
+INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+DASHBOARD_ORIGINS = [
+    o.strip() for o in os.getenv("DASHBOARD_ORIGINS", "http://localhost,http://127.0.0.1").split(",")
+    if o.strip()
+]
+
 app = FastAPI(title="Antigravity Predictor v2")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=DASHBOARD_ORIGINS,
+                   allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+
+def require_internal_token(x_internal_token: str = Header(default="")) -> None:
+    if not INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=503, detail="INTERNAL_API_TOKEN is not configured")
+    if x_internal_token != INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid internal token")
 
 loop: asyncio.AbstractEventLoop | None = None
 
@@ -720,7 +732,7 @@ def get_assets():
 # ── Enriched signal endpoints (Hermes signal agent ↔ dashboard) ───────────────
 
 @app.post("/api/enriched-signal/{asset}")
-async def post_enriched_signal(asset: str, payload: dict):
+async def post_enriched_signal(asset: str, payload: dict, _: None = Depends(require_internal_token)):
     """
     Written by the Hermes signal agent when a high-confidence event fires.
     `asset` is URL-encoded, e.g. 'BTC%2FUSDT' or 'BTC_USDT'.

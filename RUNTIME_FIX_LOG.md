@@ -115,3 +115,31 @@ Deferred follow-up queue:
 Outcome:
 - READY_FOR_TARGET_AGENT_INSTALL_TEST
 - Next action: paste the single-block target Hermes prompt into the test-machine Hermes and return its final report.
+
+---
+
+## Run 2026-07-19 beta1-controller-hardening
+
+Goal:
+Implement verified minimum repo-level Beta 1 hardening before the next install pull, while keeping target/local Hermes config/install/report-only.
+
+Source state:
+- base commit: `e1fde76905d37780cadc909bde2d6e7321fc399b`
+- repo: https://github.com/serviciosnewtech-a11y/antigravity-predictor
+
+Backups:
+- local backup root: `/media/hermes/Storage/products/Predictor/backups/beta1-20260719T010212Z`
+- backup directory is local-only and ignored by git.
+
+Repo-level changes staged for Beta 1:
+- token-gate executor mutating routes: `/execute`, `/cancel/*`, `/close/*`
+- token-gate predictor service mutating route: `/api/enriched-signal/*`
+- leave browser-facing `/api/chat` available so disabled backend returns honest `503 agent_unavailable`; public chat abuse control remains deferred
+- wire signal_agent to send `X-Internal-Token` to predictor
+- generate `INTERNAL_API_TOKEN` in `deploy.sh` when `.env` is missing or blank
+- force dry-run unless `DRY_RUN=false` and `LIVE_CONFIRM=I_ACCEPT_LIVE_TRADING`
+- replace wildcard CORS defaults with configurable `DASHBOARD_ORIGINS`
+- deny public nginx POSTs through `/executor/`, preserving read-only status through nginx
+
+Deferred follow-up:
+- rate limiting, container hardening, dependency pinning, log hygiene, audit log persistence, order sizing, SL/TP, threshold/data-feature work remain in `HARDENING_FOLLOWUP_TASKS.md` until verified by runtime evidence.

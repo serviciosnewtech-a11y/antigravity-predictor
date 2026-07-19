@@ -5,7 +5,31 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 need() { command -v "$1" >/dev/null 2>&1 || { echo "BLOCKED: missing command: $1"; exit 10; }; }
 load_env() { set -a; source .env; set +a; }
 
+ensure_internal_token() {
+  python3 - <<'PY'
+from pathlib import Path
+import secrets
+
+path = Path('.env')
+lines = path.read_text().splitlines()
+found = False
+out = []
+for line in lines:
+    if line.startswith('INTERNAL_API_TOKEN='):
+        found = True
+        key, value = line.split('=', 1)
+        if not value.strip():
+            line = f'{key}={secrets.token_hex(32)}'
+    out.append(line)
+if not found:
+    out.append(f'INTERNAL_API_TOKEN={secrets.token_hex(32)}')
+path.write_text('\n'.join(out) + '\n')
+PY
+}
+
 [ -f .env ] || cp .env.example .env
+need python3
+ensure_internal_token
 load_env
 
 [ "${DRY_RUN:-}" = "true" ] || { echo "BLOCKED: DRY_RUN must be true for demo"; exit 11; }
@@ -58,11 +82,13 @@ compose_cmd() {
 
 check_ports() {
   local out
-  out=$(ss -ltnp 2>/dev/null | grep -E ':80\b' || true)
+  local dashboard_port="${DASHBOARD_PORT:-80}"
+  local dashboard_url="http://localhost:${dashboard_port}"
+  out=$(ss -ltnp 2>/dev/null | grep -E ":${dashboard_port}\\b" || true)
   [ -z "$out" ] && return 0
-  if curl -fsS --max-time 5 http://localhost/api/status >/dev/null 2>&1 \
-    && curl -fsS --max-time 5 http://localhost/executor/health >/dev/null 2>&1 \
-    && curl -fsS --max-time 5 http://localhost/forge/health >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "${dashboard_url}/api/status" >/dev/null 2>&1 \
+    && curl -fsS --max-time 5 "${dashboard_url}/executor/health" >/dev/null 2>&1 \
+    && curl -fsS --max-time 5 "${dashboard_url}/forge/health" >/dev/null 2>&1; then
     echo "Existing Antigravity stack is responding; treating required ports as redeploy-safe."
     return 0
   fi
@@ -111,12 +137,14 @@ warn_backend_ports
 compose_cmd config --quiet
 compose_cmd up -d --build
 compose_cmd ps
-wait_for_url http://localhost/api/status dashboard-proxy
-wait_for_url http://localhost/executor/health executor-proxy
-wait_for_url http://localhost/forge/health forge-proxy
-curl -fsS http://localhost/api/status | python3 -m json.tool
-curl -fsS http://localhost/executor/health | python3 -m json.tool || curl -fsS http://localhost/executor/health
-curl -fsS http://localhost/forge/health | python3 -m json.tool || curl -fsS http://localhost/forge/health
+dashboard_port="${DASHBOARD_PORT:-80}"
+dashboard_url="http://localhost:${dashboard_port}"
+wait_for_url "${dashboard_url}/api/status" dashboard-proxy
+wait_for_url "${dashboard_url}/executor/health" executor-proxy
+wait_for_url "${dashboard_url}/forge/health" forge-proxy
+curl -fsS "${dashboard_url}/api/status" | python3 -m json.tool
+curl -fsS "${dashboard_url}/executor/health" | python3 -m json.tool || curl -fsS "${dashboard_url}/executor/health"
+curl -fsS "${dashboard_url}/forge/health" | python3 -m json.tool || curl -fsS "${dashboard_url}/forge/health"
 compose_cmd logs predictor --tail 80 || true
 compose_cmd logs signal_agent --tail 80 || true
-echo "Dashboard: http://$(hostname -I | awk '{print $1}')/"
+echo "Dashboard: http://$(hostname -I | awk '{print $1}'):${dashboard_port}/"
