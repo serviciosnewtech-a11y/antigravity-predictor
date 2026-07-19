@@ -36,5 +36,13 @@ dashboard/index.html.tmp
 src/__probe_test.txt
 backups/
 
+# Derived config — predictor_server.py loads config from src/config.json
+# (resolved relative to its own file location). It's a copy of the
+# canonical root config.json: the Dockerfile creates it via COPY at build
+# time, run_local.sh syncs it fresh at every local run. It should never be
+# hand-edited or committed on its own — that's exactly how a stale,
+# machine-specific absolute path got baked in and committed previously.
+src/config.json
+
 # Sentinel written by retrain_all.sh in Docker mode
 models/.retrain_complete

@@ -32,7 +32,11 @@ except Exception as e:
 ASSETS = list(config["assets"].keys())          # ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 DISPLAY_ASSETS = ASSETS + ["XAU/USD"]
 MACRO_DISPLAY_ASSETS = {"XAU/USD"}
-GOLD_PARQUET_PATH = os.environ.get("GOLD_PARQUET_PATH", "/app/data/macro/gold.parquet")
+# Relative default: resolves to /app/data/macro/gold.parquet in Docker
+# (WORKDIR /app, same as before) and to <repo-root>/data/macro/gold.parquet
+# bare-metal. Same fix as forge/db.py's FORGE_DATA_DIR — an absolute
+# "/app/..." default only worked by coincidence inside a container.
+GOLD_PARQUET_PATH = os.environ.get("GOLD_PARQUET_PATH", "data/macro/gold.parquet")
 TIMEFRAME = config.get("timeframe", "15m")
 SUPPORTED_TIMEFRAMES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": "D"}
 TF_MINS = SUPPORTED_TIMEFRAMES.get(TIMEFRAME, 15)

@@ -92,10 +92,24 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# ── Sync config.json into src/ ─────────────────────────────────────────────
+# predictor_server.py always loads its config from src/config.json
+# (resolved relative to the script's own location, not CWD — see
+# CONFIG_PATH in predictor_server.py). The Docker build produces this via
+# `COPY config.json src/config.json`; local runs need the same sync, done
+# fresh every run so a stale/machine-specific src/config.json can never
+# silently drift from the canonical root config.json.
+echo "[run_local] Syncing config.json -> src/config.json …"
+cp "$SCRIPT_DIR/config.json" "$SRC_DIR/config.json"
+
 # ── Start Predictor server ─────────────────────────────────────────────────
+# Run with CWD at the repo root (not src/) so the relative model paths in
+# config.json ("models/model_btc_long.txt") resolve the same way they do
+# in Docker (WORKDIR /app, CMD runs `python src/predictor_server.py` from
+# /app). cd-ing into src/ first would break that resolution.
 echo "[run_local] Starting Predictor server on http://localhost:18910 …"
-cd "$SRC_DIR"
-"$PYTHON" predictor_server.py &
+cd "$SCRIPT_DIR"
+"$PYTHON" "$SRC_DIR/predictor_server.py" &
 PIDS+=($!)
 echo "[run_local] Predictor PID: ${PIDS[-1]}"
 
@@ -103,9 +117,14 @@ echo "[run_local] Predictor PID: ${PIDS[-1]}"
 sleep 4
 
 # ── Start Signal Agent ─────────────────────────────────────────────────────
+# Needs CWD=src/ so `signal_agent` resolves as a top-level importable
+# package (it lives at src/signal_agent/, and there's an unrelated
+# src-level signal_agent/Dockerfile at repo root that would otherwise
+# shadow it). Run in a subshell so this cd doesn't affect the rest of the
+# script — the predictor above needs CWD at the repo root instead.
 if [[ $NO_AGENT -eq 0 ]]; then
     echo "[run_local] Starting Hermes signal agent (backend=$SA_INFERENCE_BACKEND)…"
-    "$PYTHON" -m signal_agent.main &
+    (cd "$SRC_DIR" && exec "$PYTHON" -m signal_agent.main) &
     PIDS+=($!)
     echo "[run_local] Signal agent PID: ${PIDS[-1]}"
 else

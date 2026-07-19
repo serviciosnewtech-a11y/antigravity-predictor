@@ -8,12 +8,20 @@ Two tables:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path("/app/forge_data/forge.db")
+# Relative default so this works both in Docker (WORKDIR /app, so
+# "forge_data" resolves to /app/forge_data — identical to the old
+# hardcoded absolute path) and bare-metal (resolves relative to wherever
+# `python -m forge.server` is actually run from, matching the
+# FORGE_DATA_DIR convention used elsewhere in .env.example /
+# docker-compose.yml). A hardcoded "/app/forge_data" broke outright
+# outside a container — there's no /app on a bare-metal host.
+DB_PATH = Path(os.getenv("FORGE_DATA_DIR", "forge_data")) / "forge.db"
 _lock = threading.Lock()
 
 

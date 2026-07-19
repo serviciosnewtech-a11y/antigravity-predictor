@@ -15,8 +15,10 @@ Usage:
     python3 -m signal_agent.main
     # or via systemd: see deploy/signal_agent.service
 
-Environment variables (required):
-    SA_INFERENCE_BACKEND — default: openai_compatible (Hermes proxy)
+Environment variables (all optional):
+    SA_INFERENCE_BACKEND — default: disabled (matches config.py /
+        .env.example — demo-safe: no LLM, no Hermes, no API key required
+        unless explicitly set to claude/ollama/openai_compatible/hermes_proxy)
 
 Optional env overrides:
     PREDICTOR_URL           — default: http://127.0.0.1:18910
