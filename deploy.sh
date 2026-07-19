@@ -58,12 +58,11 @@ compose_cmd() {
 
 check_ports() {
   local out
-  out=$(ss -ltnp 2>/dev/null | grep -E ':(80|18910|18911|18912)\b' || true)
+  out=$(ss -ltnp 2>/dev/null | grep -E ':80\b' || true)
   [ -z "$out" ] && return 0
   if curl -fsS --max-time 5 http://localhost/api/status >/dev/null 2>&1 \
-    && curl -fsS --max-time 5 http://localhost:18910/api/status >/dev/null 2>&1 \
-    && curl -fsS --max-time 5 http://localhost:18911/health >/dev/null 2>&1 \
-    && curl -fsS --max-time 5 http://localhost:18912/health >/dev/null 2>&1; then
+    && curl -fsS --max-time 5 http://localhost/executor/health >/dev/null 2>&1 \
+    && curl -fsS --max-time 5 http://localhost/forge/health >/dev/null 2>&1; then
     echo "Existing Antigravity stack is responding; treating required ports as redeploy-safe."
     return 0
   fi
@@ -75,6 +74,14 @@ check_ports() {
   echo "BLOCKED: unrelated required port owner detected"
   echo "$out"
   exit 18
+}
+
+warn_backend_ports() {
+  local out
+  out=$(ss -ltnp 2>/dev/null | grep -E ':(18910|18911|18912)\b' || true)
+  [ -z "$out" ] && return 0
+  echo "WARNING: backend host ports are listening before redeploy; next compose up should remove Antigravity-owned bindings:"
+  echo "$out"
 }
 
 wait_for_url() {
@@ -97,17 +104,19 @@ wait_for_url() {
 mkdir -p logs
 need curl
 need ss
+need python3
 ensure_proxy
 check_ports
+warn_backend_ports
 compose_cmd config --quiet
 compose_cmd up -d --build
 compose_cmd ps
-wait_for_url http://localhost:18910/api/status predictor-direct
 wait_for_url http://localhost/api/status dashboard-proxy
-wait_for_url http://localhost:18911/health executor
-wait_for_url http://localhost:18912/health forge
+wait_for_url http://localhost/executor/health executor-proxy
+wait_for_url http://localhost/forge/health forge-proxy
 curl -fsS http://localhost/api/status | python3 -m json.tool
-curl -fsS http://localhost:18910/api/status | python3 -m json.tool
+curl -fsS http://localhost/executor/health | python3 -m json.tool || curl -fsS http://localhost/executor/health
+curl -fsS http://localhost/forge/health | python3 -m json.tool || curl -fsS http://localhost/forge/health
 compose_cmd logs predictor --tail 80 || true
 compose_cmd logs signal_agent --tail 80 || true
 echo "Dashboard: http://$(hostname -I | awk '{print $1}')/"

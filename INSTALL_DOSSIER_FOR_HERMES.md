@@ -33,13 +33,10 @@ Stop immediately and report evidence if any of these are true:
 1. `DRY_RUN` is not `true`.
 2. `EXCHANGE_API_KEY` or `EXCHANGE_API_SECRET` is non-empty.
 3. Docker is not installed or not accessible through the current user or `sg docker`.
-4. Required ports are held by unrelated services and the existing listeners are not this app stack:
+4. Required public entry port is held by an unrelated service and the existing listener is not this app stack:
    - `80`
-   - `18910`
-   - `18911`
-   - `18912`
 5. Any step requires sudo, destructive host changes, wiping unknown directories, firewall changes, package installation, credential entry, or production exchange setup.
-6. The GitHub clone does not resolve to commit `bce7598eefe29a6f034a0299e5e7fd9a4852e3ce` or a later operator-approved commit.
+6. The GitHub clone does not resolve to the latest public `main` commit or a specific operator-approved commit.
 7. A command fails and the next action is not explicitly covered by this dossier or by `diagnose.sh`.
 
 Do not continue under uncertainty. Return a concise blocker report.
@@ -102,10 +99,10 @@ fi
 git rev-parse HEAD
 ```
 
-Expected commit unless the operator explicitly approved a newer one:
+Expected source:
 
 ```text
-bce7598eefe29a6f034a0299e5e7fd9a4852e3ce
+latest public main, or a specific commit explicitly approved by the operator
 ```
 
 Then:
@@ -152,8 +149,8 @@ Do not enable Hermes/Ollama/Anthropic enrichment during the first install test u
 3. block if demo safety is violated
 4. skip Hermes proxy startup when `SA_INFERENCE_BACKEND=disabled`
 5. verify Docker/Compose access
-6. allow redeploy if ports are already owned by this same app stack
-7. block if required ports are owned by unrelated services
+6. allow redeploy if public port `80` is already owned by this same app stack
+7. block if public port `80` is owned by an unrelated service
 8. run:
 
 ```bash
@@ -163,14 +160,15 @@ docker compose up -d --build
 
 or equivalent through `sg docker`
 
-9. wait for these endpoints:
+9. wait for these nginx-routed endpoints:
 
 ```text
-http://localhost:18910/api/status
 http://localhost/api/status
-http://localhost:18911/health
-http://localhost:18912/health
+http://localhost/executor/health
+http://localhost/forge/health
 ```
+
+Backend services should not publish host ports in the hardened installer path. Direct host checks for `18910`, `18911`, and `18912` are diagnostic exposure checks, not required success endpoints.
 
 10. print the dashboard URL:
 
@@ -187,9 +185,8 @@ The install test is successful only if all checks pass:
 ```bash
 docker compose ps
 curl -fsS http://localhost/api/status
-curl -fsS http://localhost:18910/api/status
-curl -fsS http://localhost:18911/health
-curl -fsS http://localhost:18912/health
+curl -fsS http://localhost/executor/health
+curl -fsS http://localhost/forge/health
 ```
 
 Expected minimum dashboard API response:
@@ -237,9 +234,9 @@ SERVICE_STATE:
 
 STATUS_ENDPOINTS:
 /dashboard_proxy=<curl http://localhost/api/status output>
-/predictor_direct=<curl http://localhost:18910/api/status output>
-/executor_health=<curl http://localhost:18911/health output>
-/forge_health=<curl http://localhost:18912/health output>
+/executor_health_proxy=<curl http://localhost/executor/health output>
+/forge_health_proxy=<curl http://localhost/forge/health output>
+/backend_host_ports=<diagnose.sh backend_ports_exposed value>
 
 UI_SMOKE:
 loads=<yes|no|not tested>
@@ -277,7 +274,7 @@ These are not blockers by themselves:
 
 - pip warning about running as root inside Docker build
 - Docker build downloading Python packages
-- existing required ports if the existing listeners are the same Antigravity/Predictor Docker stack and the health endpoints respond
+- existing public port `80` if the existing listener is the same Antigravity/Predictor Docker stack and the nginx-routed health endpoints respond
 - chat/enrichment disabled in default mode
 - no Hermes proxy on port `8645` when `SA_INFERENCE_BACKEND=disabled`
 
@@ -292,7 +289,8 @@ These are blockers until fixed or explicitly overridden by the operator:
 - any required health endpoint remains unavailable after deploy wait
 - `DRY_RUN=false`
 - exchange credentials are present during demo test
-- unrelated service owns port `80`, `18910`, `18911`, or `18912`
+- unrelated service owns public port `80`
+- backend host ports `18910`, `18911`, or `18912` remain exposed after hardened redeploy, unless the operator explicitly approved loopback-only dev exposure
 - dashboard loads with fake assistant replies instead of disabled/real backend state
 - git clone asks for credentials for the public repo
 - commit does not match the expected commit or a newer operator-approved commit

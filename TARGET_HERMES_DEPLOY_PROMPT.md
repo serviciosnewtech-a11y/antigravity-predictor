@@ -1,26 +1,27 @@
 # Target Hermes Deploy Prompt — Antigravity Predictor
 
-Paste this into Hermes on the test PC after placing the release tarball on that machine.
+Paste this into Hermes on the test PC for a repo-assisted install test.
 
 ```text
-You are the execution worker on this test PC. Deploy the Antigravity Predictor package from the provided tarball. Do not redesign the app. Do not enable live trading. Keep DRY_RUN=true. Treat Hermes/Ollama inference as optional: core dashboard must deploy even if no LLM backend is available.
+You are the execution worker on this test PC. Deploy Antigravity Predictor from the public GitHub repo. Do not redesign the app. Do not patch source code. Do not enable live trading. Keep DRY_RUN=true. Treat Hermes/Ollama inference as optional: core dashboard must deploy even if no LLM backend is available.
 
-Package path: <ABSOLUTE_PATH_TO_TARBALL>
-Expected SHA256: <SHA256_FROM_SHA256SUMS>
-Install root: ~/antigravity-predictor-test
+Repository: https://github.com/serviciosnewtech-a11y/antigravity-predictor.git
+Install root: ~/antigravity-predictor-test/antigravity-predictor
 
 Steps:
 1. Create/reuse ~/antigravity-predictor-test.
-2. Extract the tarball there so docker-compose.yml, deploy.sh, diagnose.sh, and README.md are at the install root.
-3. Verify SHA256 against SHA256SUMS.txt if present.
+2. Clone or pull https://github.com/serviciosnewtech-a11y/antigravity-predictor.git.
+3. Read INSTALL_DOSSIER_FOR_HERMES.md before deploying.
 4. Run: bash deploy.sh
 5. If deploy.sh blocks, run: bash diagnose.sh
 6. Report only concrete evidence:
    - pwd
-   - sha256 verification result
+   - git rev-parse HEAD
    - docker compose ps
    - curl http://localhost/api/status result
-   - curl http://localhost:18910/api/status result
+   - curl http://localhost/executor/health result
+   - curl http://localhost/forge/health result
+   - backend host-port exposure check for 18910/18911/18912
    - dashboard URL shown by deploy.sh
    - whether Spanish/English UI toggle is visible
    - whether chat shows honest unavailable state or a real backend reply
@@ -28,9 +29,11 @@ Steps:
 Stop conditions:
 - DRY_RUN is not true.
 - Exchange API keys are non-empty.
-- Required ports are held by unrelated processes.
+- Public port 80 is held by an unrelated process.
+- Backend ports 18910/18911/18912 remain exposed after hardened redeploy.
 - Docker is unavailable and cannot be accessed via direct user or sg docker.
 - Any command would require sudo or destructive host changes.
+- A core/code issue appears; report evidence only, do not patch it on the test PC.
 ```
 
 ## Optional LLM/Hermes enhancement

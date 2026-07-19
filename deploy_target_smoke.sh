@@ -21,8 +21,8 @@ docker --version
 docker compose version
 
 printf '\n[3/6] port preflight\n'
-if ss -ltnp | grep -E ':80|:18910|:18911|:18912'; then
-  echo 'STOP: one or more required ports are already occupied'
+if ss -ltnp | grep -E ':80\b'; then
+  echo 'STOP: public entry port 80 is already occupied'
   exit 20
 fi
 
@@ -36,8 +36,17 @@ printf '\n[6/6] smoke\n'
 docker compose ps
 printf '\n--- nginx /api/status ---\n'
 curl -fsS http://localhost/api/status | python3 -m json.tool
-printf '\n--- direct predictor /api/status ---\n'
-curl -fsS http://localhost:18910/api/status | python3 -m json.tool
+printf '\n--- nginx /executor/health ---\n'
+curl -fsS http://localhost/executor/health | python3 -m json.tool || curl -fsS http://localhost/executor/health
+printf '\n--- nginx /forge/health ---\n'
+curl -fsS http://localhost/forge/health | python3 -m json.tool || curl -fsS http://localhost/forge/health
+printf '\n--- backend host-port exposure check ---\n'
+if ss -ltnp | grep -E ':(18910|18911|18912)\b'; then
+  echo 'STOP: backend host ports remain exposed'
+  exit 21
+else
+  echo 'backend_ports_exposed=no'
+fi
 printf '\n--- predictor logs ---\n'
 docker compose logs predictor --tail 100
 printf '\n--- signal_agent logs ---\n'

@@ -108,6 +108,7 @@ Current agreed posture:
 Deferred follow-up queue:
 - Public repo hygiene decision/scrub after current test cycle.
 - Hardening Backlog v2 P0/P1 implementation after runtime baseline is proven.
+- Verified installer/deploy hardening now includes backend service host-port removal and nginx-routed health checks; remaining Fable 5 audit items stay advisory until verified against source/runtime.
 - Batch installer creation after one or more manual/agent-assisted installs reveal real friction.
 - Realtime run evidence collection for chat behavior, signal behavior, data pipeline gaps, and Docker/runtime issues.
 

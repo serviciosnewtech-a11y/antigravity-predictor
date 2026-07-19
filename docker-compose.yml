@@ -19,8 +19,6 @@ services:
       context: .
       dockerfile: predictor/Dockerfile
     restart: unless-stopped
-    ports:
-      - "${PREDICTOR_PORT:-18910}:18910"
     env_file: .env
     environment:
       - SA_INFERENCE_BACKEND=${SA_INFERENCE_BACKEND:-disabled}
@@ -44,8 +42,6 @@ services:
       context: .
       dockerfile: executor/Dockerfile
     restart: unless-stopped
-    ports:
-      - "${EXECUTOR_PORT:-18911}:18911"
     env_file: .env
     environment:
       - EXCHANGE=${EXCHANGE:-bybit}
@@ -63,8 +59,6 @@ services:
       context: .
       dockerfile: forge/Dockerfile
     restart: unless-stopped
-    ports:
-      - "${FORGE_PORT:-18912}:18912"
     environment:
       - PREDICTOR_WS_URL=ws://predictor:18910/ws
       - ATR_PERIOD=14
