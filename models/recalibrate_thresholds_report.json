@@ -1,68 +1,68 @@
 {
   "model_btc_long": {
-    "actual_fire_rate": 0.5,
+    "actual_fire_rate": 0.65,
     "direction": "long",
-    "entry_threshold": 0.0521,
-    "exit_threshold": 0.0417,
+    "entry_threshold": 0.0377,
+    "exit_threshold": 0.0301,
     "prob_max": 0.8732,
     "prob_median": 0.0521,
     "prob_min": 0.0007,
     "symbol": "BTC/USDT",
-    "target_fire_rate": 0.5
+    "target_fire_rate": 0.65
   },
   "model_btc_short": {
-    "actual_fire_rate": 0.5,
+    "actual_fire_rate": 0.65,
     "direction": "short",
-    "entry_threshold": 0.0504,
-    "exit_threshold": 0.0403,
+    "entry_threshold": 0.0366,
+    "exit_threshold": 0.0293,
     "prob_max": 0.8923,
     "prob_median": 0.0504,
     "prob_min": 0.0004,
     "symbol": "BTC/USDT",
-    "target_fire_rate": 0.5
+    "target_fire_rate": 0.65
   },
   "model_eth_long": {
-    "actual_fire_rate": 0.5,
+    "actual_fire_rate": 0.65,
     "direction": "long",
-    "entry_threshold": 0.0867,
-    "exit_threshold": 0.0694,
+    "entry_threshold": 0.0688,
+    "exit_threshold": 0.0551,
     "prob_max": 0.8352,
-    "prob_median": 0.0867,
+    "prob_median": 0.0868,
     "prob_min": 0.0112,
     "symbol": "ETH/USDT",
-    "target_fire_rate": 0.5
+    "target_fire_rate": 0.65
   },
   "model_eth_short": {
-    "actual_fire_rate": 0.5,
+    "actual_fire_rate": 0.65,
     "direction": "short",
-    "entry_threshold": 0.1019,
-    "exit_threshold": 0.0815,
+    "entry_threshold": 0.0782,
+    "exit_threshold": 0.0626,
     "prob_max": 0.8808,
-    "prob_median": 0.1019,
+    "prob_median": 0.1018,
     "prob_min": 0.0118,
     "symbol": "ETH/USDT",
-    "target_fire_rate": 0.5
+    "target_fire_rate": 0.65
   },
   "model_sol_long": {
-    "actual_fire_rate": 0.5,
+    "actual_fire_rate": 0.65,
     "direction": "long",
-    "entry_threshold": 0.1059,
-    "exit_threshold": 0.0847,
+    "entry_threshold": 0.0896,
+    "exit_threshold": 0.0717,
     "prob_max": 0.813,
-    "prob_median": 0.1059,
+    "prob_median": 0.106,
     "prob_min": 0.0337,
     "symbol": "SOL/USDT",
-    "target_fire_rate": 0.5
+    "target_fire_rate": 0.65
   },
   "model_sol_short": {
-    "actual_fire_rate": 0.5,
+    "actual_fire_rate": 0.65,
     "direction": "short",
-    "entry_threshold": 0.1312,
-    "exit_threshold": 0.1049,
+    "entry_threshold": 0.1077,
+    "exit_threshold": 0.0861,
     "prob_max": 0.762,
     "prob_median": 0.1312,
     "prob_min": 0.0443,
     "symbol": "SOL/USDT",
-    "target_fire_rate": 0.5
+    "target_fire_rate": 0.65
   }
 }

@@ -9,41 +9,41 @@
     "BTC/USDT": {
       "model_long_path": "models/model_btc_long.txt",
       "model_short_path": "models/model_btc_short.txt",
-      "buy_threshold": 0.0521,
-      "exit_threshold": 0.0417,
-      "sell_threshold": 0.0504,
-      "exit_short_threshold": 0.0403,
+      "buy_threshold": 0.0377,
+      "exit_threshold": 0.0301,
+      "sell_threshold": 0.0366,
+      "exit_short_threshold": 0.0293,
       "tp_atr_mult": 1.5,
       "sl_atr_mult": 1.0,
       "spread_offset_pct": 0.0002,
       "max_candles_held": 4,
-      "_note": "H-13 retrain 2026-07-19, thresholds recalibrated to a target 50% fire rate (percentile of the model's own validation-set probability distribution, not F1-maximized against the rare TP/SL label \u2014 that approach produced thresholds the live probability rarely crossed, i.e. permanent NEUTRAL). Actual fire rates: long=50%, short=50%. Still a fast calibration pass, not a PAPER_BASELINE result \u2014 a higher fire rate trades away selectivity for visibility; re-tune before anything trades real money."
+      "_note": "H-13 retrain 2026-07-19, thresholds recalibrated to a target 65% fire rate (percentile of the model's own validation-set probability distribution, not F1-maximized against the rare TP/SL label \u2014 that approach produced thresholds the live probability rarely crossed, i.e. permanent NEUTRAL). Actual fire rates: long=65%, short=65%. Still a fast calibration pass, not a PAPER_BASELINE result \u2014 a higher fire rate trades away selectivity for visibility; re-tune before anything trades real money."
     },
     "ETH/USDT": {
       "model_long_path": "models/model_eth_long.txt",
       "model_short_path": "models/model_eth_short.txt",
-      "buy_threshold": 0.0867,
-      "exit_threshold": 0.0694,
-      "sell_threshold": 0.1019,
-      "exit_short_threshold": 0.0815,
+      "buy_threshold": 0.0688,
+      "exit_threshold": 0.0551,
+      "sell_threshold": 0.0782,
+      "exit_short_threshold": 0.0626,
       "tp_atr_mult": 1.5,
       "sl_atr_mult": 1.0,
       "spread_offset_pct": 0.0002,
       "max_candles_held": 4,
-      "_note": "H-13 retrain 2026-07-19, thresholds recalibrated to a target 50% fire rate (percentile of the model's own validation-set probability distribution, not F1-maximized against the rare TP/SL label \u2014 that approach produced thresholds the live probability rarely crossed, i.e. permanent NEUTRAL). Actual fire rates: long=50%, short=50%. Still a fast calibration pass, not a PAPER_BASELINE result \u2014 a higher fire rate trades away selectivity for visibility; re-tune before anything trades real money."
+      "_note": "H-13 retrain 2026-07-19, thresholds recalibrated to a target 65% fire rate (percentile of the model's own validation-set probability distribution, not F1-maximized against the rare TP/SL label \u2014 that approach produced thresholds the live probability rarely crossed, i.e. permanent NEUTRAL). Actual fire rates: long=65%, short=65%. Still a fast calibration pass, not a PAPER_BASELINE result \u2014 a higher fire rate trades away selectivity for visibility; re-tune before anything trades real money."
     },
     "SOL/USDT": {
       "model_long_path": "models/model_sol_long.txt",
       "model_short_path": "models/model_sol_short.txt",
-      "buy_threshold": 0.1059,
-      "exit_threshold": 0.0847,
-      "sell_threshold": 0.1312,
-      "exit_short_threshold": 0.1049,
+      "buy_threshold": 0.0896,
+      "exit_threshold": 0.0717,
+      "sell_threshold": 0.1077,
+      "exit_short_threshold": 0.0861,
       "tp_atr_mult": 1.5,
       "sl_atr_mult": 1.0,
       "spread_offset_pct": 0.0003,
       "max_candles_held": 4,
-      "_note": "H-13 retrain 2026-07-19, thresholds recalibrated to a target 50% fire rate (percentile of the model's own validation-set probability distribution, not F1-maximized against the rare TP/SL label \u2014 that approach produced thresholds the live probability rarely crossed, i.e. permanent NEUTRAL). Actual fire rates: long=50%, short=50%. Still a fast calibration pass, not a PAPER_BASELINE result \u2014 a higher fire rate trades away selectivity for visibility; re-tune before anything trades real money."
+      "_note": "H-13 retrain 2026-07-19, thresholds recalibrated to a target 65% fire rate (percentile of the model's own validation-set probability distribution, not F1-maximized against the rare TP/SL label \u2014 that approach produced thresholds the live probability rarely crossed, i.e. permanent NEUTRAL). Actual fire rates: long=65%, short=65%. Still a fast calibration pass, not a PAPER_BASELINE result \u2014 a higher fire rate trades away selectivity for visibility; re-tune before anything trades real money."
     }
   }
 }
