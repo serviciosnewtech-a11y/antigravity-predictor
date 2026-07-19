@@ -2550,7 +2550,7 @@ window.syncObjectTree = function() {
       chatMessagesContainer.innerHTML = `
         <div class="chat-msg system">
           <div class="msg-header"><span class="msg-sender system">Hermes</span><span>Just now</span></div>
-          <div>Live advisory chat is wired through /api/chat. Non-executing selectable-timeframe context only.</div>
+          <div>Advisory chat is disabled-ready on /api/chat and replies only when a real Hermes/Ollama proxy is configured. If unavailable, this panel shows explicit unavailable.</div>
         </div>
       `;
     }
@@ -2728,9 +2728,9 @@ const hermesChat = (() => {
       proposalTriggers: "Trigger conditions",
       proposalRisk: "Risk levels",
       proposalSession: "Session state",
-      introText: "Online. I provide advisory signal context for BTC, ETH, SOL, and daily Gold macro context. Ask me about current signals, position state, or session performance.",
+      introText: "Chat route is available; backend replies only when a real Hermes/Ollama proxy is configured. If unavailable, the panel will show an explicit unavailable message.",
       placeholder: "Ask about signals, positions, stats…",
-      fabTitle: "Chat with Hermes",
+      fabTitle: "Hermes chat (disabled-ready)",
       expandTitle: "Expand chat",
       compactTitle: "Compact chat",
       closeTitle: "Close",
@@ -2738,7 +2738,7 @@ const hermesChat = (() => {
       youLabel: "You",
       systemLabel: "System",
       noResponse: "No response.",
-      unavailable: "Could not reach Hermes",
+      unavailable: "Hermes chat unavailable. Configure a real Hermes/Ollama proxy for /api/chat.",
     },
     es: {
       langButton: "EN",
@@ -2754,9 +2754,9 @@ const hermesChat = (() => {
       proposalTriggers: "Condiciones",
       proposalRisk: "Niveles de riesgo",
       proposalSession: "Estado de sesión",
-      introText: "En línea. Doy contexto asesor para señales de BTC, ETH, SOL y contexto macro diario de oro. Pregúntame por señales actuales, posición o rendimiento de sesión.",
+      introText: "Ruta de chat disponible; responde solo cuando haya un proxy real de Hermes/Ollama configurado. Si no está disponible, el panel lo mostrará explícitamente.",
       placeholder: "Pregunta por señales, posiciones, estadísticas…",
-      fabTitle: "Chatear con Hermes",
+      fabTitle: "Chat de Hermes (listo para deshabilitado)",
       expandTitle: "Expandir chat",
       compactTitle: "Compactar chat",
       closeTitle: "Cerrar",
@@ -2764,7 +2764,7 @@ const hermesChat = (() => {
       youLabel: "Tú",
       systemLabel: "Sistema",
       noResponse: "Sin respuesta.",
-      unavailable: "No se pudo contactar a Hermes",
+      unavailable: "Chat de Hermes no disponible. Configura un proxy real de Hermes/Ollama para /api/chat.",
     },
   };
   const savedLang = localStorage.getItem("hermes_chat_lang_user_set") === "1"
@@ -3046,7 +3046,7 @@ function initAdvisoryChat() {
       appendChatMsg("advisory", "Hermes", data.reply || (localStorage.getItem("hermes_chat_lang") === "en" ? "No response." : "Sin respuesta."));
     } catch (err) {
       const es = localStorage.getItem("hermes_chat_lang") !== "en";
-      appendChatMsg("system", es ? "Sistema" : "System", `${es ? "No se pudo contactar a Hermes" : "Could not reach Hermes"}: ${err.message}`);
+      appendChatMsg("system", es ? "Sistema" : "System", `${es ? "Chat de Hermes no disponible. Configura un proxy real de Hermes/Ollama para /api/chat." : "Hermes chat unavailable. Configure a real Hermes/Ollama proxy for /api/chat."}: ${err.message}`);
     }
   }
 
