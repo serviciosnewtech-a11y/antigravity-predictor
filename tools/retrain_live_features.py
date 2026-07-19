@@ -34,6 +34,7 @@ import json
 import sys
 import time as _time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -48,7 +49,10 @@ from lgbm_poc.train import TrainConfig, train_binary_model
 from download_ohlcv import fetch_ohlcv
 
 # Import the live feature builder directly — the actual fix.
-from predictor_server import build_features, FUNDING_FEATURE_COLUMNS, PEER_FEATURE_SUFFIXES  # noqa: E402
+from predictor_server import (  # noqa: E402
+    build_features, FUNDING_FEATURE_COLUMNS, PEER_FEATURE_SUFFIXES,
+    HTF_FEATURE_COLUMNS, HTF_TIMEFRAMES,
+)
 
 # The 41 columns the H-13 P0 audit classified LIVE (primary_basic 24 +
 # primary_structure_smc 17). Anything build_features() computes beyond
@@ -93,12 +97,13 @@ def peer_prefixes_for(symbol: str) -> list[str]:
 
 
 def feature_columns_for(symbol: str) -> list[str]:
-    """The full 57-column live feature list for one asset's model: the
+    """The full 65-column live feature list for one asset's model: the
     base 41 (shared formula, shared code — true single source of truth)
-    plus the 8 funding columns plus 8 cross-asset columns named for
-    whichever two peers aren't `symbol`."""
+    plus 8 funding columns plus 8 cross-asset columns (named for whichever
+    two peers aren't `symbol`) plus 8 BTC higher-timeframe columns (same
+    literal columns for every model — BTC regime context, not per-asset)."""
     peer_cols = [f"{p}_{suf}" for p in peer_prefixes_for(symbol) for suf in PEER_FEATURE_SUFFIXES]
-    return BASE_LIVE_FEATURE_COLUMNS + FUNDING_FEATURE_COLUMNS + peer_cols
+    return BASE_LIVE_FEATURE_COLUMNS + FUNDING_FEATURE_COLUMNS + peer_cols + HTF_FEATURE_COLUMNS
 
 
 # ── Historical funding-rate + mark/index price fetch (Bybit public REST) ────
@@ -242,6 +247,116 @@ def compute_funding_feature_table(ohlcv_timestamps: pd.Series, funding_hist: pd.
     return grid[["timestamp"] + FUNDING_FEATURE_COLUMNS]
 
 
+# ── Historical BTC higher-timeframe (1h/4h) fetch + feature computation ─────
+# NOTE on parity with the live path: predictor_server.py's
+# fetch_btc_htf_context() computes these 8 columns from the last ~100 live
+# 1h/4h candles fetched fresh each time (5-min cache). Here we recompute the
+# SAME formulas (ema_fast/slow trend, 3-bar log return, ATR percentile) as a
+# full historical series instead of a live snapshot — same caveat as the
+# funding family above: same formula, independently implemented for the
+# historical case, not literally shared code.
+
+def cached_fetch_kline(symbol: str, interval_min: int, since_ms: int, cache_dir: Path,
+                        budget_s: float = 30.0) -> pd.DataFrame:
+    """Bybit regular kline (not mark/index) at an arbitrary interval,
+    paginated forward via startTime, resumable — used for BTC's 1h/4h
+    higher-timeframe history. Distinct from cached_fetch_ohlcv (which is
+    15m-only, via ccxt) since this needs arbitrary intervals via Bybit's
+    REST kline endpoint directly."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"kline_{interval_min}m_{symbol.replace('/', '_')}.parquet"
+    bybit_sym = symbol.replace("/", "")
+
+    cached = pd.read_parquet(cache_path) if cache_path.exists() else pd.DataFrame(columns=["timestamp", "open", "high", "low", "close"])
+    cursor = int(cached["timestamp"].max().timestamp() * 1000) + 1 if len(cached) else since_ms
+
+    if len(cached) and cached["timestamp"].max() >= pd.Timestamp.utcnow() - pd.Timedelta(minutes=interval_min * 2):
+        return cached
+
+    t0 = _time.monotonic()
+    new_rows = []
+    while _time.monotonic() - t0 < budget_s:
+        r = requests.get(f"{_BYBIT_BASE}/kline",
+                          params={"category": "linear", "symbol": bybit_sym, "interval": str(interval_min),
+                                  "start": cursor, "limit": 1000},
+                          timeout=15)
+        data = r.json().get("result", {}).get("list", [])
+        if not data:
+            break
+        batch = pd.DataFrame([
+            {"timestamp": pd.Timestamp(int(row[0]), unit="ms", tz="UTC"),
+             "open": float(row[1]), "high": float(row[2]), "low": float(row[3]), "close": float(row[4])}
+            for row in data
+        ]).sort_values("timestamp")
+        new_rows.append(batch)
+        newest = int(batch["timestamp"].max().timestamp() * 1000)
+        if newest <= cursor:
+            break
+        cursor = newest + 1
+        if batch["timestamp"].max() >= pd.Timestamp.utcnow() - pd.Timedelta(minutes=interval_min * 2):
+            break
+
+    if new_rows:
+        combined = pd.concat([cached, *new_rows], ignore_index=True)
+        combined = combined.drop_duplicates(subset="timestamp").sort_values("timestamp").reset_index(drop=True)
+        combined.to_parquet(cache_path)
+        cached = combined
+    return cached
+
+
+def compute_htf_series(kline: pd.DataFrame, tf_name: str) -> pd.DataFrame:
+    """Same 4 formulas as predictor_server.fetch_btc_htf_context(), applied
+    as a full historical series instead of a last-value snapshot."""
+    df = kline.sort_values("timestamp").reset_index(drop=True)
+    closes, highs, lows = df["close"], df["high"], df["low"]
+    ema_fast = closes.ewm(span=9, adjust=False).mean()
+    ema_slow = closes.ewm(span=21, adjust=False).mean()
+    close_val = closes.replace(0, pd.NA)
+    trend_strength  = ((ema_fast - ema_slow) / close_val).fillna(0.0)
+    trend_direction = (ema_fast > ema_slow).astype(int) - (ema_fast < ema_slow).astype(int)
+    return_3 = np.log(closes / closes.shift(3).replace(0, pd.NA)).fillna(0.0)
+    atr_proxy = (highs - lows).rolling(14, min_periods=5).mean().fillna(0.0)
+    atr_min = atr_proxy.rolling(50, min_periods=10).min()
+    atr_max = atr_proxy.rolling(50, min_periods=10).max()
+    atr_percentile = ((atr_proxy - atr_min) / (atr_max - atr_min).replace(0, pd.NA)).fillna(0.5)
+    return pd.DataFrame({
+        "timestamp": df["timestamp"],
+        f"btc_{tf_name}_trend_direction": trend_direction,
+        f"btc_{tf_name}_trend_strength": trend_strength,
+        f"btc_{tf_name}_return_3": return_3,
+        f"btc_{tf_name}_atr_percentile": atr_percentile,
+    })
+
+
+def build_htf_table(since_ms: int, cache_dir: Path, budget_s_per_tf: float = 20.0) -> Optional[pd.DataFrame]:
+    """Fetch BTC's 1h and 4h historical klines and build the merged
+    8-column HTF feature table, keyed by timestamp. Same table is used for
+    all 3 asset models (BTC regime context is asset-agnostic)."""
+    series = []
+    for tf_name, interval in HTF_TIMEFRAMES:
+        kline = cached_fetch_kline("BTC/USDT", interval, since_ms, cache_dir, budget_s=budget_s_per_tf)
+        if kline.empty:
+            print(f"  WARNING: no {tf_name} kline data for BTC — HTF family will be zero-filled for training.")
+            return None
+        series.append(compute_htf_series(kline, tf_name))
+    htf = series[0]
+    for s in series[1:]:
+        htf = pd.merge(htf, s, on="timestamp", how="outer")
+    return htf.sort_values("timestamp").reset_index(drop=True)
+
+
+def merge_htf_onto_grid(ohlcv_timestamps: pd.Series, htf_table: pd.DataFrame) -> pd.DataFrame:
+    """asof-merge the (much sparser) 1h/4h HTF table onto the 15m OHLCV
+    timestamp grid, forward-filling each regime reading until the next one."""
+    grid = pd.DataFrame({"timestamp": pd.to_datetime(ohlcv_timestamps).dt.tz_localize(None)}).sort_values("timestamp")
+    htf = htf_table.copy()
+    htf["timestamp"] = htf["timestamp"].dt.tz_localize(None)
+    grid = pd.merge_asof(grid, htf.sort_values("timestamp"), on="timestamp", direction="backward")
+    for col in HTF_FEATURE_COLUMNS:
+        grid[col] = grid[col].fillna(0.0 if "atr_percentile" not in col else 0.5)
+    return grid[["timestamp"] + HTF_FEATURE_COLUMNS]
+
+
 def best_f1_threshold(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float, dict]:
     """Scan candidate thresholds, return the one maximizing F1 on this split."""
     candidates = np.unique(np.quantile(y_prob, np.linspace(0.5, 0.98, 49)))
@@ -315,11 +430,13 @@ def cached_fetch_ohlcv(exchange: str, symbol: str, since_ms: int, cache_dir: Pat
     return cached
 
 
-def fetch_all_expanded(days: int, exchange: str, cache_dir: Path) -> tuple[dict, dict, dict, bool]:
+def fetch_all_expanded(days: int, exchange: str, cache_dir: Path) -> tuple[dict, dict, dict, Optional[pd.DataFrame], bool]:
     """
     Phase 1 of the expanded pipeline, factored out so both this script and
     tools/recalibrate_thresholds.py can reuse it against the same cache.
-    Returns (raw_ohlcv, base_feats, funding_tables, all_caught_up).
+    Returns (raw_ohlcv, base_feats, funding_tables, htf_table, all_caught_up).
+    htf_table is a single shared DataFrame (BTC 1h/4h context is the same
+    for all 3 asset models), or None if it couldn't be fetched.
     """
     since_ms = int((pd.Timestamp.utcnow() - pd.Timedelta(days=days)).timestamp() * 1000)
     raw_ohlcv: dict[str, pd.DataFrame] = {}
@@ -357,10 +474,17 @@ def fetch_all_expanded(days: int, exchange: str, cache_dir: Path) -> tuple[dict,
         else:
             print(f"  WARNING: incomplete funding/mark/index data for {symbol} — rerun --fetch-only to continue.")
 
-    return raw_ohlcv, base_feats, funding_tables, all_caught_up
+    print(f"\n=== [fetch] BTC higher-timeframe (1h/4h) klines ===")
+    htf_table = build_htf_table(since_ms, cache_dir, budget_s_per_tf=18.0)
+    if htf_table is not None:
+        print(f"  {len(htf_table)} merged 1h/4h rows "
+              f"({htf_table['timestamp'].min()} .. {htf_table['timestamp'].max()})")
+
+    return raw_ohlcv, base_feats, funding_tables, htf_table, all_caught_up
 
 
-def assemble_expanded_table(symbol: str, base_feats: dict, funding_tables: dict) -> tuple[pd.DataFrame, list[str]]:
+def assemble_expanded_table(symbol: str, base_feats: dict, funding_tables: dict,
+                             htf_table: Optional[pd.DataFrame] = None) -> tuple[pd.DataFrame, list[str]]:
     """
     Phase 2's per-asset assembly, also factored out for reuse by
     tools/recalibrate_thresholds.py. Merges symbol's own base features with
@@ -400,6 +524,29 @@ def assemble_expanded_table(symbol: str, base_feats: dict, funding_tables: dict)
         for suf in PEER_FEATURE_SUFFIXES:
             feats[f"{prefix}_{suf}"] = feats[f"{prefix}_{suf}"].fillna(0.0)
 
+    if htf_table is not None:
+        # htf_table is on a sparse 1h/4h grid with tz-aware UTC timestamps;
+        # feats["timestamp"] is the dense tz-naive 15m grid. An exact-key
+        # merge would only populate rows landing exactly on an hour/4h
+        # boundary and leave everything else fillna'd to the flat default —
+        # silently destroying almost all of this family's signal. Use the
+        # same tz-normalized asof/forward-fill approach as
+        # merge_htf_onto_grid() so every 15m row gets its last-known BTC
+        # regime reading instead.
+        htf_norm = htf_table.copy()
+        htf_norm["timestamp"] = pd.to_datetime(htf_norm["timestamp"]).dt.tz_localize(None)
+        feats_ts = pd.to_datetime(feats["timestamp"])
+        if feats_ts.dt.tz is not None:
+            feats_ts = feats_ts.dt.tz_localize(None)
+        feats = feats.assign(timestamp=feats_ts).sort_values("timestamp")
+        feats = pd.merge_asof(feats, htf_norm.sort_values("timestamp"), on="timestamp", direction="backward")
+        for col in HTF_FEATURE_COLUMNS:
+            feats[col] = feats[col].fillna(0.0 if "atr_percentile" not in col else 0.5)
+    else:
+        for col in HTF_FEATURE_COLUMNS:
+            feats[col] = 0.5 if "atr_percentile" in col else 0.0
+        print(f"  WARNING: BTC higher-timeframe columns zero-filled for TRAINING only (fetch unavailable).")
+
     return feats, feature_columns_for(symbol)
 
 
@@ -431,9 +578,9 @@ def main() -> int:
             all_caught_up = all_caught_up and caught_up
             print(f"  using {len(raw)} candles ({raw['timestamp'].min()} .. {raw['timestamp'].max()})")
             raw_ohlcv[symbol] = raw
-        base_feats, funding_tables = {}, {}
+        base_feats, funding_tables, htf_table = {}, {}, None
     else:
-        raw_ohlcv, base_feats, funding_tables, all_caught_up = fetch_all_expanded(args.days, args.exchange, cache_dir)
+        raw_ohlcv, base_feats, funding_tables, htf_table, all_caught_up = fetch_all_expanded(args.days, args.exchange, cache_dir)
 
     if args.fetch_only:
         print(f"\n{'ALL CAUGHT UP' if all_caught_up else 'NOT CAUGHT UP YET — rerun with --fetch-only to continue'}")
@@ -460,7 +607,7 @@ def main() -> int:
             if symbol not in base_feats:
                 print(f"  SKIPPED — no base features available (OHLCV fetch incomplete for {symbol}).")
                 continue
-            feats, feature_columns = assemble_expanded_table(symbol, base_feats, funding_tables)
+            feats, feature_columns = assemble_expanded_table(symbol, base_feats, funding_tables, htf_table)
 
         missing = [c for c in feature_columns if c not in feats.columns]
         if missing:

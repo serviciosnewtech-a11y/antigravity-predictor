@@ -169,6 +169,85 @@ FUNDING_FEATURE_COLUMNS = [
 ]
 PEER_FEATURE_SUFFIXES = ["return_1", "return_3", "trend", "volume_block"]
 
+# ── Higher-timeframe BTC context (feature-expansion round 2) ────────────────
+# Council consensus (independent Opus + Fable review) on going from 57
+# toward ~100 features: feature count was not the bottleneck at 41->57
+# (AUC flat), so most of the remaining 126-feature schema — full 1h/4h/1d
+# higher-timeframe (27 cols), microstructure (12 cols), macro (30 cols) —
+# was NOT worth building given ~19k rows/asset and a 7-12% positive rate.
+# The one family both reviewers endorsed: a TRIMMED higher-timeframe BTC
+# tier (regime/trend context genuinely orthogonal to 15m features), skip
+# the 1d tier (too few daily bars to be meaningful), skip macro (daily data
+# forward-filled onto 15m candles is near-constant and reintroduces the
+# same flaky-third-party-feed risk that caused H-13 for gold), skip
+# microstructure (defer — more train/serve drift surface for a
+# 1-hour-horizon label that 1-minute noise mostly can't inform).
+#
+# This family is BTC-specific and asset-agnostic — ALL THREE models (BTC/
+# ETH/SOL) get the same BTC 1h/4h regime context, matching how the
+# original 126-feature schema always named these "btc_1h_"/"btc_4h_"
+# regardless of which asset the model was for (BTC dominance as shared
+# market regime, not per-asset).
+HTF_TIMEFRAMES = [("1h", 60), ("4h", 240)]   # (name, Bybit interval code)
+HTF_FEATURE_SUFFIXES = ["trend_direction", "trend_strength", "return_3", "atr_percentile"]
+HTF_FEATURE_COLUMNS = [f"btc_{tf}_{suf}" for tf, _ in HTF_TIMEFRAMES for suf in HTF_FEATURE_SUFFIXES]
+assert len(HTF_FEATURE_COLUMNS) == 8
+
+_BTC_HTF_CACHE: dict = {"data": None, "fetched_at": 0.0}
+_BTC_HTF_CACHE_TTL_S = 300.0  # 1h/4h regime doesn't change fast; 5 min is plenty fresh
+
+
+def fetch_btc_htf_context() -> Optional[dict]:
+    """
+    Live BTC 1h/4h trend/volatility context via Bybit's public kline
+    endpoint. Shared across all 3 AssetEngine instances (module-level
+    cache, not per-engine) since it's the same BTC-market-regime signal for
+    every model. Returns None (not a fake zero) on any failure — callers
+    must let build_features() omit these columns, which the H-13 gate
+    correctly reports as missing rather than silently zero-filling.
+    """
+    now = time.time()
+    if _BTC_HTF_CACHE["data"] is not None and (now - _BTC_HTF_CACHE["fetched_at"]) < _BTC_HTF_CACHE_TTL_S:
+        return _BTC_HTF_CACHE["data"]
+    try:
+        ctx = {}
+        for tf_name, interval in HTF_TIMEFRAMES:
+            r = requests.get(
+                "https://api.bybit.com/v5/market/kline",
+                params={"category": "linear", "symbol": "BTCUSDT", "interval": str(interval), "limit": 100},
+                timeout=10,
+            )
+            rows = r.json().get("result", {}).get("list", [])
+            if not rows:
+                return None
+            rows = list(reversed(rows))  # Bybit returns newest-first
+            closes = pd.Series([float(row[4]) for row in rows])
+            highs  = pd.Series([float(row[2]) for row in rows])
+            lows   = pd.Series([float(row[3]) for row in rows])
+
+            ema_fast = closes.ewm(span=9, adjust=False).mean()
+            ema_slow = closes.ewm(span=21, adjust=False).mean()
+            close_val = closes.replace(0, pd.NA)
+            trend_strength  = ((ema_fast - ema_slow) / close_val).fillna(0.0)
+            trend_direction = (ema_fast > ema_slow).astype(int) - (ema_fast < ema_slow).astype(int)
+            return_3 = np.log(closes / closes.shift(3).replace(0, pd.NA)).fillna(0.0)
+            atr_proxy = (highs - lows).rolling(14, min_periods=5).mean().fillna(0.0)
+            atr_min = atr_proxy.rolling(50, min_periods=10).min()
+            atr_max = atr_proxy.rolling(50, min_periods=10).max()
+            atr_percentile = ((atr_proxy - atr_min) / (atr_max - atr_min).replace(0, pd.NA)).fillna(0.5)
+
+            ctx[f"btc_{tf_name}_trend_direction"] = float(trend_direction.iloc[-1])
+            ctx[f"btc_{tf_name}_trend_strength"]  = float(trend_strength.iloc[-1])
+            ctx[f"btc_{tf_name}_return_3"]        = float(return_3.iloc[-1])
+            ctx[f"btc_{tf_name}_atr_percentile"]  = float(atr_percentile.iloc[-1])
+
+        _BTC_HTF_CACHE["data"] = ctx
+        _BTC_HTF_CACHE["fetched_at"] = now
+        return ctx
+    except Exception as e:
+        logger.warning(f"[htf] fetch_btc_htf_context failed: {e}")
+        return None
+
 _FUNDING_SNAPSHOT_CACHE: dict = {}   # symbol -> {"data": {...}, "fetched_at": ts}
 _FUNDING_SNAPSHOT_TTL_S = 60.0
 
@@ -210,7 +289,8 @@ def fetch_funding_snapshot(symbol: str) -> Optional[dict]:
 
 
 # ── Feature Engineering (shared across all assets) ───────────────────────────
-def build_features(candles: list[dict], funding_ctx: Optional[dict] = None, peer_ctx: Optional[dict] = None) -> pd.DataFrame:
+def build_features(candles: list[dict], funding_ctx: Optional[dict] = None, peer_ctx: Optional[dict] = None,
+                    htf_ctx: Optional[dict] = None) -> pd.DataFrame:
     df = pd.DataFrame(candles)
     df["date"] = pd.to_datetime(df["time"], unit="s")
     out = df.sort_values("date").reset_index(drop=True)
@@ -334,6 +414,12 @@ def build_features(candles: list[dict], funding_ctx: Optional[dict] = None, peer
             for suffix in PEER_FEATURE_SUFFIXES:
                 if suffix in values:
                     out[f"{prefix}_{suffix}"] = values[suffix]
+
+    # ── Higher-timeframe BTC context (same broadcast rationale as above) ──
+    if htf_ctx:
+        for col in HTF_FEATURE_COLUMNS:
+            if col in htf_ctx:
+                out[col] = htf_ctx[col]
 
     return out
 
@@ -485,7 +571,8 @@ class AssetEngine:
         try:
             funding_ctx = self._build_funding_ctx()
             peer_ctx = self._build_peer_ctx()
-            feats = build_features(self.candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx)
+            htf_ctx = fetch_btc_htf_context()
+            feats = build_features(self.candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx, htf_ctx=htf_ctx)
 
             # Publish this engine's own basic context for siblings to read as
             # cross-asset peer context on their next tick.

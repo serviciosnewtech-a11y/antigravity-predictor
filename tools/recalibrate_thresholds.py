@@ -69,7 +69,7 @@ def main() -> int:
     results = {}
 
     if args.no_expand:
-        base_feats, funding_tables = {}, {}
+        base_feats, funding_tables, htf_table = {}, {}, None
         for symbol in ASSETS:
             cache_path = cache_dir / f"{symbol.replace('/', '_')}.parquet"
             raw = pd.read_parquet(cache_path)
@@ -81,17 +81,17 @@ def main() -> int:
             base_feats[symbol] = build_features(candles).rename(columns={"date": "timestamp"})
     else:
         # Reuses whatever is already cached in cache_dir (OHLCV, funding
-        # history, mark/index klines) — network calls only happen for
-        # whatever's missing or stale, same resumable pattern as the
-        # retrain script itself.
-        _, base_feats, funding_tables, _ = fetch_all_expanded(args.days, "bybit", cache_dir)
+        # history, mark/index klines, BTC 1h/4h klines) — network calls
+        # only happen for whatever's missing or stale, same resumable
+        # pattern as the retrain script itself.
+        _, base_feats, funding_tables, htf_table, _ = fetch_all_expanded(args.days, "bybit", cache_dir)
 
     for symbol, cfg in ASSETS.items():
         if args.no_expand:
             feats = base_feats[symbol]
             feature_columns = BASE_LIVE_FEATURE_COLUMNS
         else:
-            feats, feature_columns = assemble_expanded_table(symbol, base_feats, funding_tables)
+            feats, feature_columns = assemble_expanded_table(symbol, base_feats, funding_tables, htf_table)
 
         # Same time_split as training so "validation" here is the same
         # slice the model's threshold was originally chosen against.

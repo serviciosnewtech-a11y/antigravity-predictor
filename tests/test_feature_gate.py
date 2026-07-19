@@ -224,6 +224,11 @@ def engine_with_stub_models(monkeypatch):
     # needing a real event loop in a synchronous test by making broadcast a
     # no-op scheduling shim.
     monkeypatch.setattr(ps.asyncio, "run_coroutine_threadsafe", lambda coro, loop: coro.close())
+    # fetch_btc_htf_context() makes a real network call to Bybit; stub it to
+    # a deterministic None so these tests don't depend on/vary with sandbox
+    # network reachability (matches _build_funding_ctx/_build_peer_ctx, which
+    # are already None in this fixture with no live cross-engine state wired).
+    monkeypatch.setattr(ps, "fetch_btc_htf_context", lambda: None)
     return ps, eng
 
 
@@ -239,8 +244,8 @@ def test_healthy_vector_reaches_model_call(engine_with_stub_models):
 
     orig = ps.build_features
 
-    def _all_features_build(candles, funding_ctx=None, peer_ctx=None):
-        df = orig(candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx)
+    def _all_features_build(candles, funding_ctx=None, peer_ctx=None, htf_ctx=None):
+        df = orig(candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx, htf_ctx=htf_ctx)
         for name in FEATURE_NAMES:
             if name not in df.columns:
                 df[name] = 0.42
@@ -284,8 +289,8 @@ def test_non_finite_injected_feature_blocks_even_if_present(engine_with_stub_mod
 
     orig = ps.build_features
 
-    def _poisoned_build(candles, funding_ctx=None, peer_ctx=None):
-        df = orig(candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx)
+    def _poisoned_build(candles, funding_ctx=None, peer_ctx=None, htf_ctx=None):
+        df = orig(candles, funding_ctx=funding_ctx, peer_ctx=peer_ctx, htf_ctx=htf_ctx)
         for name in FEATURE_NAMES:
             if name not in df.columns:
                 df[name] = 0.42
