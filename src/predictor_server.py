@@ -1297,27 +1297,32 @@ async def hermes_chat(req: _ChatRequest):
         if pos else "flat"
     )
 
-    lang = "es" if str(req.language).lower().startswith("es") else "en"
+    # Only override the persona's own Spanish-by-default behavior if the
+    # dashboard explicitly told us the client's language is English.
+    lang = "en" if str(req.language).lower().startswith("en") and req.language else "es"
     language_rule = (
-        "Respond in Spanish for all client-facing advisory text. "
-        if lang == "es"
-        else "Respond in English for all client-facing advisory text. "
+        "The dashboard reports this client's UI language as English — respond in English unless "
+        "their message is clearly in Spanish, in which case follow them into Spanish."
+        if lang == "en"
+        else "Respond in Spanish by default, per your persona above."
     )
 
+    memory_recall = _operator_memory_recall()
     system_ctx = (
-        f"You are Hermes, the signal intelligence agent for the Antigravity Predictor system. "
-        f"Current state for {sym}: signal={signal}, long_prob={long_prob:.4f}, "
-        f"short_prob={short_prob:.4f}, position={pos_str}, "
-        f"total_trades={stats['total_trades']}, win_trades={stats['win_trades']}, "
-        f"net_pnl={stats['total_pnl']:.2f} USDT. "
-        f"Enriched context: {enriched.get('analyst_note', 'none')}. "
-        + language_rule
-        + f"Provide concise advisory signal commentary. "
-        + f"You do NOT execute trades. Keep responses under 3 sentences."
+        _CRYPTO_OPERATOR_SYSTEM_PROMPT
+        + f"\n\n[Live engine data — {sym}]\nsignal={signal}, long_prob={long_prob:.4f}, "
+        + f"short_prob={short_prob:.4f}, position={pos_str}, "
+        + f"total_trades={stats['total_trades']}, win_trades={stats['win_trades']}, "
+        + f"net_pnl={stats['total_pnl']:.2f} USDT. "
+        + f"Enriched context: {enriched.get('analyst_note', 'none')}."
+        + f"\n\n[Full system context — read-only]\n{_live_system_context()}"
+        + (f"\n\n[Recalled memory from earlier conversations with this client]\n{memory_recall}" if memory_recall else "")
+        + f"\n\n[Language]\n{language_rule}"
     )
 
     result = _call_llm_backend(system_ctx, req.message, req.history, _backend_config(""))
     if result:
+        _operator_memory_append(req.message, result["reply"])
         return {
             "reply": result["reply"],
             "source": result["source"],
@@ -1453,24 +1458,29 @@ def _live_system_context() -> str:
     return "\n".join(lines) if lines else "No live system data available."
 
 
-_TUTOR_MEMORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "tutor_memory.jsonl")
-_TUTOR_MEMORY_RECALL = 12  # how many past exchanges to fold back into context
+_LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+_TUTOR_MEMORY_PATH = os.path.join(_LOGS_DIR, "tutor_memory.jsonl")
+_OPERATOR_MEMORY_PATH = os.path.join(_LOGS_DIR, "crypto_operator_memory.jsonl")
+_MEMORY_RECALL = 12  # how many past exchanges to fold back into context, per persona
 
 
-def _tutor_memory_recall() -> str:
-    """Best-effort read of recent past tutor exchanges, persisted server-side
-    across sessions/reloads (the client's own history[] only lives in the
-    browser tab). Missing/unreadable file just means no memory yet."""
+def _persona_memory_recall(path: str) -> str:
+    """Best-effort read of recent past exchanges for one persona, persisted
+    server-side across sessions/reloads (the client's own history[] only
+    lives in the browser tab). Each persona has its own file — the Tutor's
+    memory and the Crypto Operator's memory are isolated from each other,
+    same as their workspaces. Missing/unreadable file just means no memory
+    yet."""
     try:
-        path = Path(_TUTOR_MEMORY_PATH)
-        if not path.exists():
+        p = Path(path)
+        if not p.exists():
             return ""
-        lines = path.read_text().strip().splitlines()[-_TUTOR_MEMORY_RECALL:]
+        lines = p.read_text().strip().splitlines()[-_MEMORY_RECALL:]
         recalled = []
         for line in lines:
             try:
                 rec = json.loads(line)
-                recalled.append(f"[{rec.get('ts', '')}] user: {rec.get('user', '')}\ntutor: {rec.get('tutor', '')}")
+                recalled.append(f"[{rec.get('ts', '')}] user: {rec.get('user', '')}\nagent: {rec.get('agent', '')}")
             except Exception:
                 continue
         return "\n\n".join(recalled)
@@ -1478,20 +1488,83 @@ def _tutor_memory_recall() -> str:
         return ""
 
 
-def _tutor_memory_append(user_msg: str, tutor_reply: str) -> None:
-    """Append this exchange to the persistent memory log. Best-effort —
-    a write failure here should never break the chat response itself."""
+def _persona_memory_append(path: str, user_msg: str, agent_reply: str) -> None:
+    """Append this exchange to one persona's persistent memory log.
+    Best-effort — a write failure here should never break the chat
+    response itself."""
     try:
-        path = Path(_TUTOR_MEMORY_PATH)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as f:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as f:
             f.write(json.dumps({
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "user": user_msg,
-                "tutor": tutor_reply,
+                "agent": agent_reply,
             }) + "\n")
     except Exception as e:
-        logger.warning(f"[tutor] memory append failed (non-fatal): {e}")
+        logger.warning(f"[chat] memory append failed for {path} (non-fatal): {e}")
+
+
+# Backwards-compatible thin wrappers used by the Tutor endpoint below.
+def _tutor_memory_recall() -> str:
+    return _persona_memory_recall(_TUTOR_MEMORY_PATH)
+
+
+def _tutor_memory_append(user_msg: str, tutor_reply: str) -> None:
+    _persona_memory_append(_TUTOR_MEMORY_PATH, user_msg, tutor_reply)
+
+
+_CRYPTO_OPERATOR_SYSTEM_PROMPT = """You are the Crypto Operator Agent — the Antigravity Predictor dashboard's
+chat box, wired directly to the system's live back engine. You are a
+dedicated counterpart for this client, who communicates primarily in
+Spanish, using crypto slang and informal market jargon. Respond in Spanish
+by default, matching a natural, competent-operator register; follow the
+client if they switch language.
+
+You run isolated: your conversation memory and reasoning workspace are
+your own, not shared with any other agent on this system. That isolation
+is about memory/workspace, not data — you ARE given real, current engine
+data every turn (signal, probabilities, position, stats, feature-gate
+health) below, and you should use it directly rather than hedge about
+signals you've actually been given. If something isn't in the context
+you were given this turn, say so rather than inferring or fabricating it.
+
+Core traits, non-negotiable:
+- Patient: never rush the client or make them feel slow for asking again.
+- Thorough: don't skip a decision-relevant angle, but organize answers so
+  the client isn't drowning — lead with what matters most.
+- NEVER ASSUME. If a message is ambiguous (unclear asset/pronoun, a slang
+  term you're not confident about in context, a number with no stated
+  unit/timeframe, an unspecified "tu opinión sobre qué"), stop and ask a
+  precise clarifying question in Spanish before answering as if you'd
+  resolved it yourself. Offer the 2-3 readings you're choosing between
+  when that's useful so the client can just point at one.
+
+Boundaries:
+- You do not execute trades, place orders, or connect to any exchange,
+  wallet, or account — you have no mechanism to, not just a policy not to.
+- No directive financial instructions ("comprá ahora"). Lay out reasoning
+  and tradeoffs; state your own read plainly when asked ("si me
+  preguntás, yo creo que...") without dressing it up as a command.
+- Never fabricate data, prices, or sources. State your confidence level
+  explicitly rather than defaulting to uniform false confidence.
+- Never claim to have executed, scheduled, or changed anything — you
+  can't; this conversation is the entirety of what you're connected to.
+
+You understand common Spanish-language crypto slang (ballena, rugpull,
+hodlear, shitcoin, pump y dump, farmear, en verde/en rojo, lunear, manos
+de diamante/de papel, quemar tokens, FOMO, FUD, DYOR, rekt, airdrop, gas,
+CEX/DEX, TVL, degen, apalancamiento, liquidación, etc.) — but a term you
+aren't confident about is exactly the kind of ambiguity you should ask
+about, not silently reinterpret."""
+
+
+def _operator_memory_recall() -> str:
+    return _persona_memory_recall(_OPERATOR_MEMORY_PATH)
+
+
+def _operator_memory_append(user_msg: str, reply: str) -> None:
+    _persona_memory_append(_OPERATOR_MEMORY_PATH, user_msg, reply)
 
 
 @app.post("/api/tutor-chat")
