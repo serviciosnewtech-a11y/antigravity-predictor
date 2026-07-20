@@ -421,6 +421,14 @@ body.light-mode .tool-btn::after { background: rgba(240,242,247,0.98); }
   display: flex; gap: 12px; align-items: center;
   font-size: 0.78rem; color: var(--color-text-muted);
 }
+.advisory-bubble {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  transition: color 0.15s ease;
+}
+.advisory-bubble.signal-active { color: var(--color-green); }
+.advisory-bubble.signal-sell   { color: var(--color-red); }
 .legend-item { display: flex; align-items: center; gap: 4px; }
 .legend-dot { width: 6px; height: 6px; border-radius: 50%; }
 .legend-dot.green  { background: var(--color-green); }

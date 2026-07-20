@@ -296,8 +296,8 @@ def enrich(asset: str, snapshot: dict, cfg: SignalAgentConfig) -> dict:
     backend = cfg.inference_backend.lower()
     if backend in {"disabled", "none", "off"}:
         logger.info(f"[enricher] Enrichment disabled for {asset}; returning neutral fallback.")
-        return _fallback_signal("LLM enrichment disabled")
-    if backend in {"openai_compatible", "hermes", "hermes_proxy"}:
+        result = _fallback_signal("LLM enrichment disabled")
+    elif backend in {"openai_compatible", "hermes", "hermes_proxy"}:
         logger.info(f"[enricher] Calling OpenAI-compatible backend ({cfg.hermes_proxy_url}, model={cfg.hermes_inference_model}) for {asset}…")
         t1 = time.monotonic()
         result = call_openai_compatible(prompt, cfg)
