@@ -2173,6 +2173,28 @@ function updateHotlists() {
     .then(data => {
       const assets = data.assets || [];
       if (!assets.length) throw new Error("empty market tickers");
+
+      // XAU/USD never ticks over the /ws feed (it's not a predictor engine —
+      // no live candle stream, just daily macro data), so its watchlist row
+      // was permanently stuck on the HTML's "—" placeholder with nothing
+      // ever writing to it. /api/market-tickers already carries a computed
+      // XAU/USD entry (last_price + change_24h from the macro parquet cache)
+      // every time this function runs, so update that row here instead of a
+      // separate fetch.
+      const gold = assets.find(a => a.symbol === "XAU/USD");
+      if (gold) {
+        const priceEl = document.getElementById("wl-price-XAU-USD");
+        const changeEl = document.getElementById("wl-change-XAU-USD");
+        if (priceEl) {
+          priceEl.textContent = `$${gold.last_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+        if (changeEl) {
+          const isUp = gold.change_24h >= 0;
+          changeEl.textContent = `${isUp ? "+" : ""}${gold.change_24h.toFixed(2)}%`;
+          changeEl.className = `wl-change text-right ${isUp ? "text-green" : "text-red"}`;
+        }
+      }
+
       volBody.innerHTML = "";
       [...assets].sort((a, b) => b.turnover_24h - a.turnover_24h).forEach(a => {
         const tr = document.createElement("tr");
