@@ -97,6 +97,26 @@ echo "[monolith] Refreshing macro data (gold/oil/dxy/spx/vix), best-effort…"
 ( cd "$SCRIPT_DIR" && timeout 20s "$PYTHON" src/fetch_macro.py --data-dir data/macro --days 730 \
     || echo "[monolith] Macro refresh skipped (offline or yfinance unavailable) — using existing data/macro/*.parquet if present." ) &
 
+# ── Metis chat relay (opt-in) — local Hermes-CLI backend for the chat ──────
+# surfaces, instead of a remote OpenAI-compatible API. Bridges predictor's
+# HERMES_PROXY_URL calls to `hermes --profile metis chat`. Off unless
+# ENABLE_METIS_RELAY=true. If HERMES_PROXY_URL is unset, this also exports
+# it pointing at the relay automatically — turning the flag on is enough,
+# no separate URL config needed for the zero-config case.
+if [[ "${ENABLE_METIS_RELAY:-false}" == "true" ]]; then
+    export METIS_RELAY_PORT="${METIS_RELAY_PORT:-8645}"
+    echo "[monolith] Starting Metis chat relay on :${METIS_RELAY_PORT} (hermes profile: ${METIS_HERMES_PROFILE:-metis}) …"
+    "$PYTHON" "$SCRIPT_DIR/tools/metis_chat_relay.py" &
+    PIDS+=($!)
+    sleep 1
+    if [[ -z "${HERMES_PROXY_URL:-}" ]]; then
+        export HERMES_PROXY_URL="http://127.0.0.1:${METIS_RELAY_PORT}"
+        echo "[monolith] HERMES_PROXY_URL was unset — pointing it at the Metis relay automatically."
+    fi
+else
+    echo "[monolith] Metis relay skipped (ENABLE_METIS_RELAY is not 'true')."
+fi
+
 # ── Predictor (CWD = repo root) ──────────────────────────────────────────────
 echo "[monolith] Starting Predictor on :18910 …"
 cd "$SCRIPT_DIR"
@@ -159,6 +179,7 @@ echo " Feature parity:   http://localhost:18910/api/feature-parity/BTC_USDT"
 [[ $NO_EXECUTOR -eq 0 ]] && echo " Executor health:  http://localhost:18911/health"
 [[ $NO_FORGE    -eq 0 ]] && echo " Forge health:     http://localhost:18912/health"
 [[ "${ENABLE_ADMIN_AGENT:-false}" == "true" && -n "${ADMIN_API_TOKEN:-}" ]] && echo " Admin agent:      http://localhost:${ADMIN_AGENT_PORT:-18913}/health  (talk to it via: python3 tools/admin_chat.py)"
+[[ "${ENABLE_METIS_RELAY:-false}" == "true" ]] && echo " Metis relay:      http://localhost:${METIS_RELAY_PORT:-8645}/health"
 echo ""
 echo " Press Ctrl+C to stop all processes."
 echo "══════════════════════════════════════════════════════"
