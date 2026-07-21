@@ -23,7 +23,16 @@ from typing import Optional, List
 from feature_gate import evaluate_feature_parity, format_gate_log_summary
 
 # ── Config ───────────────────────────────────────────────────────────────────
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# src/config.json is normally created by run_monolith.sh/run_local.sh (which
+# sync the repo-root config.json into src/ before launch) or baked in by
+# predictor/Dockerfile's `COPY config.json src/config.json`. Neither of
+# those run before a bare `pytest` invocation from a clean checkout, so
+# fall back to the repo-root copy directly rather than requiring every
+# caller to remember the sync step first.
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(_SRC_DIR, "config.json")
+if not os.path.exists(CONFIG_PATH):
+    CONFIG_PATH = os.path.join(os.path.dirname(_SRC_DIR), "config.json")
 try:
     with open(CONFIG_PATH) as f:
         config = json.load(f)
