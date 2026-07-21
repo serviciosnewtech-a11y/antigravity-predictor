@@ -19,6 +19,15 @@ COPY src/feature_gate.py      src/feature_gate.py
 COPY config.json              src/config.json
 COPY dashboard/               dashboard/
 
+# Bake in the macro parquet cache (gold/oil/dxy/spx/vix) as a fallback so
+# /api/market-tickers has real gold data even before the docker-compose
+# bind-mount (${DATA_DIR:-./data}:/app/data) is populated, or on a network
+# where live Yahoo Finance fetches are blocked. predictor_server.py only
+# ever reads this cache directly — it never calls yfinance itself, so no
+# extra Python dependency is needed here. The bind-mount (if present)
+# still takes precedence at runtime and can supply fresher data.
+COPY data/macro/               data/macro/
+
 # Models + logs are provided at runtime via bind mounts
 RUN mkdir -p models logs
 

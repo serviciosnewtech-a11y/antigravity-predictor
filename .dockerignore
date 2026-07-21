@@ -3,7 +3,15 @@ __pycache__
 *.pyc
 *.pyo
 .env
-data/
+# data/ is excluded wholesale EXCEPT data/macro/*.parquet, which the
+# predictor image bakes in as a fallback so the gold/macro dashboard
+# panel works even before the docker-compose bind-mount is populated
+# or if live Yahoo Finance fetches are blocked on a given network.
+# Mirrors the same carve-out in .gitignore.
+data/*
+!data/macro/
+data/macro/*
+!data/macro/*.parquet
 logs/
 *.egg-info
 .git
