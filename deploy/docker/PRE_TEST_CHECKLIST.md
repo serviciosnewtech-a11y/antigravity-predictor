@@ -68,6 +68,31 @@ src/some_module.py`?** This is the exact bug that was just found and fixed.
 The same question applies to `executor/server.py`, `forge/*.py`, and
 `signal_agent/*.py` against their own Dockerfiles.
 
+## New gap found 2026-07-23, not yet fixed for docker
+
+A real bare-metal deploy of beta-1.10.3 turned up two real chat-backend
+plumbing gaps, both fixed for bare-metal in beta-1.10.4:
+
+1. `predictor.service` never had `EnvironmentFile=-/opt/predictor/.env` at
+   all (unlike `signal_agent.service`), so nothing in `.env` — including any
+   chat backend config — ever reached the process serving `/api/chat`.
+   **Check whether `docker-compose.yml` has the equivalent gap** — i.e.
+   confirm the `predictor` service's `env_file:`/`environment:` actually
+   passes `HERMES_PROXY_URL`/`CHAT_BACKEND`/`ANTHROPIC_API_KEY`/etc. through
+   to the container, not just `MODELS_DIR`/`DATA_DIR`-style path vars.
+2. `tools/agent_chat_relay.py` (the local, no-API-key CLI-agent chat
+   backend — Pattern B, the actual default per `.env.example`) is wired
+   into `run_monolith.sh` and now `deploy/bare-metal/agent_relay.service`,
+   but **has no docker-compose service at all**. If the docker product
+   should also ship with a working local-agent chat backend by default
+   (matching bare-metal), it needs its own service block in
+   `docker-compose.yml` (build from a thin Dockerfile or reuse the
+   predictor image, `ENABLE_AGENT_RELAY`-equivalent env, expose 8645 only
+   on the internal compose network, and `HERMES_PROXY_URL=http://agent_relay:8645`
+   in the predictor service's environment) before this can be considered
+   at parity with bare-metal. Not done yet — flagging so it isn't
+   rediscovered from scratch when docker's live test finally happens.
+
 ## Checklist for the next live docker test
 
 Run in order — each step is cheap and catches a different failure class:

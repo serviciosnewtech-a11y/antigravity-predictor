@@ -1,0 +1,68 @@
+[Unit]
+Description=Antigravity Predictor - Agent Chat Relay (local CLI-agent backend for /api/chat)
+Documentation=https://github.com/serviciosnewtech-a11y/antigravity-predictor
+After=network.target
+# No hard dependency on predictor.service in either direction: predictor
+# calls out to this relay per-request over HTTP (via HERMES_PROXY_URL), so
+# whichever one starts first, the other just gets a connection error until
+# both are up — no crash, no ordering requirement.
+
+[Service]
+Type=simple
+User=predictor
+Group=predictor
+WorkingDirectory=/opt/predictor
+
+# ── Environment ───────────────────────────────────────────────────────────────
+# All vars come from /opt/predictor/.env — never hardcode keys here.
+# tools/agent_chat_relay.py bridges predictor_server.py's OpenAI-style
+# HERMES_PROXY_URL calls to a local CLI-based agent (AGENT_RELAY_CMD,
+# default: `hermes --profile metis chat -q {prompt}`) instead of a remote
+# hosted API — this is the "ships with Hermes by default" path: the actual
+# local Hermes agent answers, with no API key, using whatever session/
+# profile/context that CLI already has, not a stateless hosted completion.
+# Previously this only existed wired into run_monolith.sh (the standalone
+# launcher) — this unit is the systemd-deployment equivalent, added
+# 2026-07-23 after a live deploy discovered the systemd product had no path
+# to Pattern B at all.
+EnvironmentFile=-/opt/predictor/.env
+
+# Loopback only, by design (see tools/agent_chat_relay.py's own docstring) —
+# this relay is meant to be reached by predictor.service on the same host,
+# never exposed to the network.
+Environment=AGENT_RELAY_HOST=127.0.0.1
+
+ExecStart=/opt/predictor/.venv/bin/python /opt/predictor/tools/agent_chat_relay.py
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=120s
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-relay
+
+# ── Resource limits ───────────────────────────────────────────────────────────
+# Zero-dependency stdlib HTTP server plus one subprocess per chat turn —
+# lightweight; the actual work happens in whatever AGENT_RELAY_CMD invokes.
+MemoryMax=256M
+CPUQuota=50%
+
+# ── Hardening ─────────────────────────────────────────────────────────────────
+# NOTE: ProtectSystem=strict makes everything except ReadWritePaths
+# read-only. agent_state/ exists for whatever session/cache files the
+# configured AGENT_RELAY_CMD binary itself needs to write (a real CLI agent
+# often keeps its own profile/session state somewhere) — if the actual
+# binary you point AGENT_RELAY_CMD at needs to write somewhere else
+# entirely, this line needs to grow to cover it, or verification will show
+# it as a real (non-timeout, non-missing-binary) invocation failure. Check
+# with a manual run (`sudo -u predictor /opt/predictor/.venv/bin/python
+# /opt/predictor/tools/agent_chat_relay.py`, then curl its /health) before
+# assuming this hardening is correct for whatever CLI ends up configured.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/predictor/logs /opt/predictor/agent_state
+
+[Install]
+WantedBy=multi-user.target

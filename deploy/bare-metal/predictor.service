@@ -10,6 +10,19 @@ User=predictor
 Group=predictor
 WorkingDirectory=/opt/predictor/src
 
+# ── Environment ───────────────────────────────────────────────────────────────
+# All vars come from /opt/predictor/.env — never hardcode keys here.
+# MISSING ENTIRELY until 2026-07-23: this unit never loaded .env at all
+# (signal_agent.service always has), so HERMES_PROXY_URL/CHAT_BACKEND/
+# ANTHROPIC_API_KEY/etc. could be set in .env forever and predictor_server.py
+# (which serves /api/chat) would never see any of it — os.environ.get() just
+# came up empty every time, no error, just a permanently unconfigured chat.
+# Found while chasing why a real deployment's chat stayed unconfigured after
+# .env was edited: predictor_server.py has no dotenv loading of its own, so
+# without this line the process environment predictor.service actually runs
+# with is whatever systemd itself has, period.
+EnvironmentFile=-/opt/predictor/.env
+
 # GOLD_PARQUET_PATH defaults to the relative path "data/macro/gold.parquet"
 # in predictor_server.py, which resolves against WorkingDirectory (src/) —
 # i.e. /opt/predictor/src/data/macro/gold.parquet. macro_refresh.service
