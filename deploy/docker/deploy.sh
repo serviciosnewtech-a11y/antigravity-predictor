@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# This script lives in deploy/docker/ alongside docker-compose.yml, but
+# .env/.env.example/logs/ all live at the repo root (shared with the
+# bare-metal product). Stay at repo root for those, and point `docker
+# compose` at the compose file two directories away via $COMPOSE_FILE so
+# every bare `docker compose ...` call below still finds it without
+# needing a -f flag on each one. (docker-compose.yml's own build.context/
+# env_file/volumes paths are resolved relative to ITS location by Compose
+# regardless of cwd, so this doesn't affect those.)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
+export COMPOSE_FILE="deploy/docker/docker-compose.yml"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "BLOCKED: missing command: $1"; exit 10; }; }
 load_env() { set -a; source .env; set +a; }

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT"
+# See deploy.sh for why this stays at repo root and uses $COMPOSE_FILE
+# instead of relying on cwd == deploy/docker/ for compose file discovery.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
+export COMPOSE_FILE="deploy/docker/docker-compose.yml"
 
 printf '[1/6] dry-run env\n'
 if [[ ! -f .env ]]; then

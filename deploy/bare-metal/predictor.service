@@ -1,6 +1,6 @@
 [Unit]
 Description=Antigravity Predictor Server
-Documentation=https://github.com/your-repo/predictor
+Documentation=https://github.com/serviciosnewtech-a11y/antigravity-predictor
 After=network-online.target
 Wants=network-online.target
 

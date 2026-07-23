@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# See deploy.sh for why this stays at repo root and uses $COMPOSE_FILE
+# instead of relying on cwd == deploy/docker/ for compose file discovery.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
+export COMPOSE_FILE="deploy/docker/docker-compose.yml"
 echo "DATE: $(date -Is)"
 echo "HOST: $(hostname)"
 echo "IP: $(hostname -I 2>/dev/null || true)"

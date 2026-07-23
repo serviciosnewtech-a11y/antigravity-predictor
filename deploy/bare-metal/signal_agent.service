@@ -1,10 +1,12 @@
 [Unit]
 Description=Antigravity Signal Agent (Hermes enrichment layer)
-Documentation=https://github.com/antigravity/predictor
-After=network-online.target docker.service
+Documentation=https://github.com/serviciosnewtech-a11y/antigravity-predictor
+After=network-online.target predictor.service
 Wants=network-online.target
-# Predictor runs inside Docker — no hard Requires on predictor.service.
-# The agent will retry automatically if the predictor is not yet up.
+# Predictor runs as its own systemd unit on this same bare-metal host
+# (deploy/bare-metal/predictor.service) — no Docker involved. No hard
+# Requires= on it, though: the agent retries automatically if the
+# predictor isn't up yet, so a predictor restart doesn't take this down too.
 
 [Service]
 Type=simple
