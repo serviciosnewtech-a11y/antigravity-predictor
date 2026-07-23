@@ -49,6 +49,32 @@ MACRO_DISPLAY_ASSETS = {"XAU/USD"}
 # bare-metal. Same fix as forge/db.py's FORGE_DATA_DIR — an absolute
 # "/app/..." default only worked by coincidence inside a container.
 GOLD_PARQUET_PATH = os.environ.get("GOLD_PARQUET_PATH", "data/macro/gold.parquet")
+
+# config.json's model_long_path/model_short_path (e.g. "models/model_btc_long.txt")
+# are repo-root-relative strings, historically opened raw against cwd. That only
+# ever worked by coincidence: Docker's predictor container has WORKDIR=/app (the
+# repo root), so it happened to line up, but bare-metal's predictor.service sets
+# WorkingDirectory=<APP_DIR>/src (so local imports resolve without a package
+# install step), which makes the same raw path look for src/models/... instead
+# of the real <APP_DIR>/models/... one level up — found via a real fresh
+# bare-metal install crash-looping (exit status 3) rather than in this sandbox.
+# Resolve via this file's own location instead, which is correct regardless of
+# cwd — same fix already applied to signal_log.py's LOGS_DIR and the models_dir
+# lookup in _model_performance_context() below.
+_MODELS_DIR = os.environ.get("MODELS_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "models"
+)
+
+
+def resolve_model_path(cfg_path: str) -> str:
+    """Resolve a config.json model_*_path value to an actual file, independent
+    of the process's current working directory."""
+    candidate = os.path.join(_MODELS_DIR, os.path.basename(cfg_path))
+    if os.path.exists(candidate):
+        return candidate
+    # Fall back to the raw cfg value as-given (e.g. an absolute path, or a
+    # cwd-relative path that happens to be correct for the current caller).
+    return cfg_path
 TIMEFRAME = config.get("timeframe", "15m")
 SUPPORTED_TIMEFRAMES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": "D"}
 TF_MINS = SUPPORTED_TIMEFRAMES.get(TIMEFRAME, 15)
@@ -479,10 +505,12 @@ class AssetEngine:
         ]
 
     def load_models(self):
-        logger.info(f"[{self.symbol}] Loading Long model: {self.cfg['model_long_path']}")
-        logger.info(f"[{self.symbol}] Loading Short model: {self.cfg['model_short_path']}")
-        self.model_long  = lgb.Booster(model_file=self.cfg["model_long_path"])
-        self.model_short = lgb.Booster(model_file=self.cfg["model_short_path"])
+        long_path  = resolve_model_path(self.cfg["model_long_path"])
+        short_path = resolve_model_path(self.cfg["model_short_path"])
+        logger.info(f"[{self.symbol}] Loading Long model: {long_path}")
+        logger.info(f"[{self.symbol}] Loading Short model: {short_path}")
+        self.model_long  = lgb.Booster(model_file=long_path)
+        self.model_short = lgb.Booster(model_file=short_path)
         self.feature_names = self.model_long.feature_name()
         logger.success(f"[{self.symbol}] Models loaded — {len(self.feature_names)} features.")
 
