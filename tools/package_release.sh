@@ -49,6 +49,16 @@ trap 'rm -rf "$STAGE"' EXIT
 log "Exporting tracked files at ${REF} (git archive — untracked/ignored files never enter the package)…"
 git archive "${REF}" | tar -x -C "$STAGE"
 
+# admin_agent/ gives an LLM unrestricted host shell access (see its own
+# docstring). It's operator-only tooling for the person running this repo on
+# their own dev machine — gated behind ENABLE_ADMIN_AGENT + a separate
+# ADMIN_API_TOKEN so it's inert by default, but it has no business shipping
+# to any client node regardless of product. Strip it (and its CLI companion)
+# out of every release, not just one product.
+log "Removing admin_agent/ (operator-only shell-access tool — never ships to client nodes)…"
+rm -rf "${STAGE}/admin_agent"
+rm -f  "${STAGE}/tools/admin_chat.py"
+
 case "$PRODUCT" in
     bare-metal)
         log "Removing deploy/docker/ (Docker-only — not needed for bare metal)…"
