@@ -1309,8 +1309,9 @@ def get_all_enriched_signals():
 
 # ── Hermes Chat endpoint ─────────────────────────────────────────────────────
 #
-# One chat surface, proxying to a generic OpenAI-compatible "Hermes proxy"
-# endpoint or Ollama — no execution tools are ever exposed; pure text in/out.
+# One chat surface, one system prompt (grounded in live engine data — signal,
+# probabilities, position, stats, model metrics), swappable backend. No
+# execution tools are ever exposed; pure text in/out, for any backend.
 #
 #   /api/chat — "Hermes", the Crypto Operator Agent. Terse, advisory-only
 #               commentary on the current signal AND — when asked — explains
@@ -1318,6 +1319,20 @@ def get_all_enriched_signals():
 #               improvements grounded in the actual model metrics on disk.
 #               Zero execution access: no tool-calling is wired up at all, so
 #               this is a structural guarantee, not a prompt-only promise.
+#
+# Ships with Hermes (an OpenAI-compatible proxy, see .env.example) as the
+# default backend, but a client can point it at a different agent without
+# touching code: set CHAT_BACKEND to "hermes_proxy" | "anthropic" | "ollama"
+# to force one explicitly, or leave it unset to auto-detect in that order
+# (see _backend_config()/_call_llm_backend()). This is deliberately narrower
+# than "accept any framework's request format" — the system prompt/context
+# assembly (what makes this chat useful) stays fixed; only the outbound
+# wire protocol to the backend is swappable. An earlier draft of this
+# also proposed a generic messages[]-in/choices[]-out contract so arbitrary
+# external frameworks (LangChain, CrewAI, etc.) could call *into* /api/chat
+# directly — rejected as scope creep with no concrete driver; nothing in
+# this system currently needs to be called by a third-party framework, only
+# to itself call a client's choice of backend.
 #
 # Previously split into two personas/endpoints (this one plus a separate
 # /api/tutor-chat "Hermes Tutor"). Merged back into one 2026-07-23: the
@@ -1390,51 +1405,123 @@ def _format_price_levels_for_prompt(levels: Optional[dict]) -> str:
 
 def _backend_config() -> dict:
     """
-    Resolve (proxy_url, proxy_key, proxy_model, ollama_url, ollama_model) for
-    the one chat surface, from the base HERMES_PROXY_URL/OLLAMA_URL vars.
-    (Previously took a `prefix` param so a separate "tutor" chat could
-    override to a different backend/model — removed when the two chat
-    personas were merged back into one; see the module-level comment above
-    /api/chat.)
+    Resolve chat-backend config from env. Three backend types are supported
+    out of the box — hermes_proxy (any OpenAI-compatible /chat/completions
+    endpoint — this already covers most third-party agents via a thin relay,
+    see .env.example's Pattern A/B), anthropic (native Anthropic Messages
+    API, for a client who wants to point straight at Claude without an
+    OpenAI-compat shim in front of it), and ollama — so a client can swap
+    which agent/model answers the dashboard's chat via .env alone, no code
+    change. CHAT_BACKEND, if set, forces exactly one of "hermes_proxy" |
+    "anthropic" | "ollama" and skips the others entirely (an explicit choice
+    that's misconfigured should surface as unavailable, not silently fail
+    over to a different backend the client didn't ask for). Left unset, the
+    order below is tried automatically for backward compatibility with
+    pre-existing HERMES_PROXY_URL-only deployments.
     """
-    proxy_url = os.environ.get("HERMES_PROXY_URL", "").rstrip("/")
-    proxy_key = os.environ.get("HERMES_PROXY_API_KEY", "local")
-    proxy_model = os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k")
-    ollama_url = os.environ.get("OLLAMA_URL", "").rstrip("/")
-    ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2")
     return {
-        "proxy_url": proxy_url, "proxy_key": proxy_key, "proxy_model": proxy_model,
-        "ollama_url": ollama_url, "ollama_model": ollama_model,
+        "backend_override": os.environ.get("CHAT_BACKEND", "").strip().lower() or None,
+        "proxy_url": os.environ.get("HERMES_PROXY_URL", "").rstrip("/"),
+        "proxy_key": os.environ.get("HERMES_PROXY_API_KEY", "local"),
+        "proxy_model": os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k"),
+        "anthropic_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+        "anthropic_model": os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-5"),
+        "ollama_url": os.environ.get("OLLAMA_URL", "").rstrip("/"),
+        "ollama_model": os.environ.get("OLLAMA_MODEL", "llama3.2"),
     }
+
+
+def _call_hermes_proxy(cfg: dict, system_ctx: str, message: str, messages_tail: list) -> Optional[dict]:
+    if not cfg["proxy_url"]:
+        return None
+    try:
+        messages = [{"role": "system", "content": system_ctx}] + messages_tail
+        messages.append({"role": "user", "content": message})
+        resp = requests.post(
+            f"{cfg['proxy_url']}/chat/completions",
+            json={"model": cfg["proxy_model"], "messages": messages, "stream": False},
+            headers={"Authorization": f"Bearer {cfg['proxy_key']}"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            choices = resp.json().get("choices", [])
+            if choices and "message" in choices[0]:
+                reply = choices[0]["message"].get("content", "").strip()
+                if reply:
+                    return {"reply": reply, "source": "hermes_proxy"}
+    except Exception as e:
+        logger.warning(f"[chat] Hermes Proxy unavailable: {e}")
+    return None
+
+
+def _call_anthropic(cfg: dict, system_ctx: str, message: str, messages_tail: list) -> Optional[dict]:
+    """Native Anthropic Messages API — distinct wire shape from the OpenAI-
+    compatible proxy path: system prompt is a top-level param (not a
+    "system" role inside messages[]), auth is x-api-key + anthropic-version
+    headers (not Bearer), and the reply is at content[0]["text"], not
+    choices[0]["message"]["content"]."""
+    if not cfg["anthropic_key"]:
+        return None
+    try:
+        messages = list(messages_tail) + [{"role": "user", "content": message}]
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            json={
+                "model": cfg["anthropic_model"],
+                "system": system_ctx,
+                "messages": messages,
+                "max_tokens": 1024,
+            },
+            headers={
+                "x-api-key": cfg["anthropic_key"],
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            content = resp.json().get("content", [])
+            if content and content[0].get("type") == "text":
+                reply = content[0].get("text", "").strip()
+                if reply:
+                    return {"reply": reply, "source": "anthropic"}
+    except Exception as e:
+        logger.warning(f"[chat] Anthropic unavailable: {e}")
+    return None
 
 
 def _call_llm_backend(system_ctx: str, message: str, history: List[_ChatMsg], cfg: dict) -> Optional[dict]:
     """
-    Shared backend-calling logic for both chat surfaces. Tries the Hermes
-    proxy first, then Ollama. Returns a reply dict on success, or None if
-    neither backend is configured/reachable — callers turn that into an
+    Shared backend-calling logic for the chat endpoint. If CHAT_BACKEND
+    names one backend explicitly, only that one is tried. Otherwise tries
+    hermes_proxy, then anthropic, then ollama, in that order (this order
+    predates anthropic support — preserved so existing HERMES_PROXY_URL-only
+    deployments keep behaving identically). Returns a reply dict on success,
+    or None if nothing configured/reachable — callers turn that into an
     honest 503, never a scripted fallback reply.
     """
     messages_tail = [{"role": h.role, "content": h.content} for h in history[-8:]]
+    override = cfg.get("backend_override")
 
-    if cfg["proxy_url"]:
-        try:
-            messages = [{"role": "system", "content": system_ctx}] + messages_tail
-            messages.append({"role": "user", "content": message})
-            resp = requests.post(
-                f"{cfg['proxy_url']}/chat/completions",
-                json={"model": cfg["proxy_model"], "messages": messages, "stream": False},
-                headers={"Authorization": f"Bearer {cfg['proxy_key']}"},
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                choices = resp.json().get("choices", [])
-                if choices and "message" in choices[0]:
-                    reply = choices[0]["message"].get("content", "").strip()
-                    if reply:
-                        return {"reply": reply, "source": "hermes_proxy"}
-        except Exception as e:
-            logger.warning(f"[chat] Hermes Proxy unavailable: {e}")
+    if override:
+        caller = {
+            "hermes_proxy": _call_hermes_proxy,
+            "anthropic": _call_anthropic,
+        }.get(override)
+        if caller:
+            return caller(cfg, system_ctx, message, messages_tail)
+        if override == "ollama":
+            pass  # falls through to the ollama call below, unchanged
+        else:
+            logger.warning(f"[chat] CHAT_BACKEND={override!r} not recognized (expected hermes_proxy|anthropic|ollama) — no backend called")
+            return None
+    else:
+        result = _call_hermes_proxy(cfg, system_ctx, message, messages_tail)
+        if result:
+            return result
+        result = _call_anthropic(cfg, system_ctx, message, messages_tail)
+        if result:
+            return result
 
     if cfg["ollama_url"]:
         try:
@@ -1777,15 +1864,49 @@ def chat_status():
 
     def _describe() -> dict:
         cfg = _backend_config()
-        if cfg["proxy_url"]:
+        override = cfg.get("backend_override")
+
+        def _hermes_proxy_result():
             base = {"configured": True, "backend": "hermes_proxy", "endpoint": cfg["proxy_url"], "model": cfg["proxy_model"]}
             base.update(_probe_local_relay(cfg["proxy_url"]))
             return base
-        if cfg["ollama_url"]:
+
+        def _anthropic_result():
+            return {
+                "configured": True, "backend": "anthropic", "endpoint": "https://api.anthropic.com/v1/messages",
+                "model": cfg["anthropic_model"], "verified": None,
+                "verify_note": "remote backend — not probed, only presence-checked",
+            }
+
+        def _ollama_result():
             base = {"configured": True, "backend": "ollama", "endpoint": cfg["ollama_url"], "model": cfg["ollama_model"]}
             base.update(_probe_local_relay(cfg["ollama_url"]))
             return base
-        return {"configured": False, "backend": None, "endpoint": None, "model": None, "verified": False, "verify_note": "not configured"}
+
+        not_configured = {"configured": False, "backend": None, "endpoint": None, "model": None, "verified": False, "verify_note": "not configured"}
+
+        if override:
+            # CHAT_BACKEND names exactly one backend to use -- report on that
+            # one specifically (including "misconfigured", if so) rather than
+            # what would've been auto-detected.
+            if override == "hermes_proxy":
+                return _hermes_proxy_result() if cfg["proxy_url"] else {**not_configured, "verify_note": "CHAT_BACKEND=hermes_proxy but HERMES_PROXY_URL is unset"}
+            if override == "anthropic":
+                return _anthropic_result() if cfg["anthropic_key"] else {**not_configured, "verify_note": "CHAT_BACKEND=anthropic but ANTHROPIC_API_KEY is unset"}
+            if override == "ollama":
+                return _ollama_result() if cfg["ollama_url"] else {**not_configured, "verify_note": "CHAT_BACKEND=ollama but OLLAMA_URL is unset"}
+            return {**not_configured, "verify_note": f"CHAT_BACKEND={override!r} not recognized (expected hermes_proxy|anthropic|ollama)"}
+
+        # No override -- report whichever the auto-detect order would
+        # actually pick (hermes_proxy, then anthropic, then ollama), matching
+        # _call_llm_backend()'s real behavior exactly.
+        if cfg["proxy_url"]:
+            return _hermes_proxy_result()
+        if cfg["anthropic_key"]:
+            return _anthropic_result()
+        if cfg["ollama_url"]:
+            return _ollama_result()
+        return not_configured
 
     # Was {"advisory_chat": ..., "tutor_chat": ...} before the two chat
     # personas were merged back into one 2026-07-23 — now just one surface.
