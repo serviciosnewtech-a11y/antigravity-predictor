@@ -27,6 +27,7 @@ Optional env overrides:
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -37,6 +38,9 @@ from loguru import logger
 
 from .config import SignalAgentConfig, load_config
 from .enricher import enrich
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # src/
+import llm_backend  # noqa: E402
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logger.remove()
@@ -134,19 +138,28 @@ def run(cfg: SignalAgentConfig) -> None:
     logger.info(f"  Cooldown:   {cfg.cooldown_seconds}s")
     logger.info(f"  Poll every: {cfg.poll_interval_seconds}s")
     backend = cfg.inference_backend.lower()
-    logger.info(f"  Backend:    {cfg.inference_backend}")
     if backend in {"disabled", "none", "off"}:
         logger.info("  Enrichment: disabled — core predictor/dashboard remains active")
-    elif backend in {"openai_compatible", "hermes", "hermes_proxy"}:
-        logger.info(f"  Model:      {cfg.hermes_inference_model}")
-        logger.info(f"  Base URL:   {cfg.hermes_proxy_url}")
-    elif backend == "ollama":
-        logger.info(f"  Model:      {cfg.ollama_model}")
-        logger.info(f"  Base URL:   {cfg.ollama_url}")
-    elif backend == "claude":
-        logger.info(f"  Model:      {cfg.claude_model}")
-        if not cfg.anthropic_api_key:
-            logger.critical("ANTHROPIC_API_KEY is not set. Claude synthesis will fail.")
+    else:
+        # SA_INFERENCE_BACKEND is now just the on/off switch — log what
+        # actually resolves via the shared llm_backend module (same one
+        # /api/chat uses), not SignalAgentConfig's own now-vestigial
+        # backend-specific fields, so this log line can't drift from
+        # reality the way the old per-branch logging could.
+        bcfg = llm_backend.backend_config()
+        override = bcfg.get("backend_override")
+        if override:
+            logger.info(f"  Backend:    {override} (forced via CHAT_BACKEND)")
+        elif bcfg["proxy_url"]:
+            logger.info(f"  Backend:    hermes_proxy — model={bcfg['proxy_model']} url={bcfg['proxy_url']}")
+        elif bcfg["anthropic_key"]:
+            logger.info(f"  Backend:    anthropic — model={bcfg['anthropic_model']}")
+        elif bcfg["ollama_url"]:
+            logger.info(f"  Backend:    ollama — model={bcfg['ollama_model']} url={bcfg['ollama_url']}")
+        else:
+            logger.critical("  Backend:    enrichment enabled (SA_INFERENCE_BACKEND) but no backend "
+                             "configured (CHAT_BACKEND/HERMES_PROXY_URL/ANTHROPIC_API_KEY/OLLAMA_URL "
+                             "all unset) — every enrichment call will fail.")
 
     last_enriched: dict[str, float] = {}  # asset → monotonic timestamp of last enrichment
 

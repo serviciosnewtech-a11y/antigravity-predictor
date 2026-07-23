@@ -38,21 +38,35 @@ class SignalAgentConfig:
     # Max news snippets to pass to Claude
     max_news_items: int = 6
 
-    # Inference backend: "disabled" | "claude" | "ollama" | "openai_compatible" | "hermes_proxy"
-    # Default is disabled so the client deployment works without Hermes, LLMs, or API keys.
+    # Inference backend on/off switch. Any value other than "disabled" |
+    # "none" | "off" enables enrichment. Default is disabled so the client
+    # deployment works without Hermes, LLMs, or API keys.
+    #
+    # This field's OLD values ("claude" | "ollama" | "openai_compatible" |
+    # "hermes_proxy") used to also select which backend answered; that
+    # selection now always goes through llm_backend.py's CHAT_BACKEND-driven
+    # resolution (the same one /api/chat uses — "same brain, one backend
+    # config", see enricher.py's call_hermes_brain()), so any non-disabled
+    # value here just means "on" now. Kept accepting the old specific
+    # values so existing .env files (SA_INFERENCE_BACKEND=claude, etc.)
+    # don't silently stop working — they just no longer pick a backend.
     inference_backend: str = "disabled"
 
-    # Claude model for synthesis (haiku = fast + cheap)
+    # ── Everything below is vestigial as of the chat/enrichment brain merge ──
+    # Still loaded from config.json's "signal_agent" block / env vars for
+    # backward compatibility, but enricher.py's actual backend call
+    # (call_hermes_brain) no longer reads any of these — it always uses
+    # llm_backend.backend_config(), which reads the SAME env var names
+    # directly (HERMES_PROXY_URL, ANTHROPIC_API_KEY, OLLAMA_URL, etc.), so
+    # for the common env-var-driven deployment path these were already
+    # duplicating the same values. Only a config.json "signal_agent" block
+    # override that ISN'T mirrored in env vars would now be silently
+    # ignored by the real call — not expected to be a real-world case, but
+    # worth knowing if these fields look unused when grepping for them.
     claude_model: str = "claude-haiku-4-5-20251001"
-
-    # Anthropic API key (prefer env var — not needed when backend=ollama or openai_compatible)
     anthropic_api_key: str = ""
-
-    # Ollama settings (used when inference_backend="ollama")
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1"   # Any model pulled in Ollama
-
-    # Hermes Proxy / OpenAI Compatible settings
+    ollama_model: str = "llama3.1"
     hermes_proxy_url: str = "http://host.docker.internal:8645/v1"
     hermes_inference_model: str = "operator-approved-model"
     hermes_proxy_api_key: str = "local"

@@ -14,9 +14,18 @@ RUN pip install --no-cache-dir \
     requests \
     loguru
 
-# Copy signal_agent package + shared config
-COPY src/signal_agent/ src/signal_agent/
-COPY config.json       src/config.json
+# Copy signal_agent package + shared config + the shared Hermes brain
+# (llm_backend.py, hermes_persona.py — backend resolution + identity/memory,
+# same modules predictor.Dockerfile copies for /api/chat; stdlib + requests/
+# loguru only, both already installed above). enricher.py/main.py import
+# these via `import llm_backend` / `import hermes_persona` after adding
+# src/ to sys.path themselves — PYTHONPATH below also covers it, but the
+# explicit COPY here is still required regardless of PYTHONPATH, same rule
+# as predictor.Dockerfile: every top-level import needs a matching COPY.
+COPY src/signal_agent/     src/signal_agent/
+COPY src/llm_backend.py    src/llm_backend.py
+COPY src/hermes_persona.py src/hermes_persona.py
+COPY config.json           src/config.json
 
 RUN mkdir -p logs
 

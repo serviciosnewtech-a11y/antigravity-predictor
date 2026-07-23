@@ -22,6 +22,8 @@ from typing import Optional, List
 
 from feature_gate import evaluate_feature_parity, format_gate_log_summary
 import signal_log
+import llm_backend
+import hermes_persona
 
 # ── Config ───────────────────────────────────────────────────────────────────
 # src/config.json is normally created by run_monolith.sh/run_local.sh (which
@@ -1404,142 +1406,18 @@ def _format_price_levels_for_prompt(levels: Optional[dict]) -> str:
 
 
 def _backend_config() -> dict:
-    """
-    Resolve chat-backend config from env. Three backend types are supported
-    out of the box — hermes_proxy (any OpenAI-compatible /chat/completions
-    endpoint — this already covers most third-party agents via a thin relay,
-    see .env.example's Pattern A/B), anthropic (native Anthropic Messages
-    API, for a client who wants to point straight at Claude without an
-    OpenAI-compat shim in front of it), and ollama — so a client can swap
-    which agent/model answers the dashboard's chat via .env alone, no code
-    change. CHAT_BACKEND, if set, forces exactly one of "hermes_proxy" |
-    "anthropic" | "ollama" and skips the others entirely (an explicit choice
-    that's misconfigured should surface as unavailable, not silently fail
-    over to a different backend the client didn't ask for). Left unset, the
-    order below is tried automatically for backward compatibility with
-    pre-existing HERMES_PROXY_URL-only deployments.
-    """
-    return {
-        "backend_override": os.environ.get("CHAT_BACKEND", "").strip().lower() or None,
-        "proxy_url": os.environ.get("HERMES_PROXY_URL", "").rstrip("/"),
-        "proxy_key": os.environ.get("HERMES_PROXY_API_KEY", "local"),
-        "proxy_model": os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k"),
-        "anthropic_key": os.environ.get("ANTHROPIC_API_KEY", ""),
-        "anthropic_model": os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-5"),
-        "ollama_url": os.environ.get("OLLAMA_URL", "").rstrip("/"),
-        "ollama_model": os.environ.get("OLLAMA_MODEL", "llama3.2"),
-    }
-
-
-def _call_hermes_proxy(cfg: dict, system_ctx: str, message: str, messages_tail: list) -> Optional[dict]:
-    if not cfg["proxy_url"]:
-        return None
-    try:
-        messages = [{"role": "system", "content": system_ctx}] + messages_tail
-        messages.append({"role": "user", "content": message})
-        resp = requests.post(
-            f"{cfg['proxy_url']}/chat/completions",
-            json={"model": cfg["proxy_model"], "messages": messages, "stream": False},
-            headers={"Authorization": f"Bearer {cfg['proxy_key']}"},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            choices = resp.json().get("choices", [])
-            if choices and "message" in choices[0]:
-                reply = choices[0]["message"].get("content", "").strip()
-                if reply:
-                    return {"reply": reply, "source": "hermes_proxy"}
-    except Exception as e:
-        logger.warning(f"[chat] Hermes Proxy unavailable: {e}")
-    return None
-
-
-def _call_anthropic(cfg: dict, system_ctx: str, message: str, messages_tail: list) -> Optional[dict]:
-    """Native Anthropic Messages API — distinct wire shape from the OpenAI-
-    compatible proxy path: system prompt is a top-level param (not a
-    "system" role inside messages[]), auth is x-api-key + anthropic-version
-    headers (not Bearer), and the reply is at content[0]["text"], not
-    choices[0]["message"]["content"]."""
-    if not cfg["anthropic_key"]:
-        return None
-    try:
-        messages = list(messages_tail) + [{"role": "user", "content": message}]
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            json={
-                "model": cfg["anthropic_model"],
-                "system": system_ctx,
-                "messages": messages,
-                "max_tokens": 1024,
-            },
-            headers={
-                "x-api-key": cfg["anthropic_key"],
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            content = resp.json().get("content", [])
-            if content and content[0].get("type") == "text":
-                reply = content[0].get("text", "").strip()
-                if reply:
-                    return {"reply": reply, "source": "anthropic"}
-    except Exception as e:
-        logger.warning(f"[chat] Anthropic unavailable: {e}")
-    return None
+    """Thin alias — the actual backend resolution lives in llm_backend.py
+    now, shared with signal_agent/enricher.py's automated enrichment (same
+    brain, one place that decides which backend answers, for both)."""
+    return llm_backend.backend_config()
 
 
 def _call_llm_backend(system_ctx: str, message: str, history: List[_ChatMsg], cfg: dict) -> Optional[dict]:
-    """
-    Shared backend-calling logic for the chat endpoint. If CHAT_BACKEND
-    names one backend explicitly, only that one is tried. Otherwise tries
-    hermes_proxy, then anthropic, then ollama, in that order (this order
-    predates anthropic support — preserved so existing HERMES_PROXY_URL-only
-    deployments keep behaving identically). Returns a reply dict on success,
-    or None if nothing configured/reachable — callers turn that into an
-    honest 503, never a scripted fallback reply.
-    """
+    """Thin alias over llm_backend.call_llm() — kept so call sites below
+    don't need touching. See llm_backend.py for the actual implementation
+    shared with signal_agent/enricher.py."""
     messages_tail = [{"role": h.role, "content": h.content} for h in history[-8:]]
-    override = cfg.get("backend_override")
-
-    if override:
-        caller = {
-            "hermes_proxy": _call_hermes_proxy,
-            "anthropic": _call_anthropic,
-        }.get(override)
-        if caller:
-            return caller(cfg, system_ctx, message, messages_tail)
-        if override == "ollama":
-            pass  # falls through to the ollama call below, unchanged
-        else:
-            logger.warning(f"[chat] CHAT_BACKEND={override!r} not recognized (expected hermes_proxy|anthropic|ollama) — no backend called")
-            return None
-    else:
-        result = _call_hermes_proxy(cfg, system_ctx, message, messages_tail)
-        if result:
-            return result
-        result = _call_anthropic(cfg, system_ctx, message, messages_tail)
-        if result:
-            return result
-
-    if cfg["ollama_url"]:
-        try:
-            messages = [{"role": "system", "content": system_ctx}] + messages_tail
-            messages.append({"role": "user", "content": message})
-            resp = requests.post(
-                f"{cfg['ollama_url']}/api/chat",
-                json={"model": cfg["ollama_model"], "messages": messages, "stream": False},
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                reply = resp.json().get("message", {}).get("content", "").strip()
-                if reply:
-                    return {"reply": reply, "source": "ollama"}
-        except Exception as e:
-            logger.warning(f"[chat] Ollama unavailable: {e}")
-
-    return None
+    return llm_backend.call_llm(system_ctx, message, messages_tail, cfg)
 
 
 @app.post("/api/chat")
@@ -1585,8 +1463,15 @@ async def hermes_chat(req: _ChatRequest):
         + f"\n\n[Live engine data — {sym}]\nsignal={signal}, long_prob={long_prob:.4f}, "
         + f"short_prob={short_prob:.4f}, position={pos_str}, "
         + f"total_trades={stats['total_trades']}, win_trades={stats['win_trades']}, "
-        + f"net_pnl={stats['total_pnl']:.2f} USDT. "
-        + f"Enriched context: {enriched.get('analyst_note', 'none')}."
+        + f"net_pnl={stats['total_pnl']:.2f} USDT."
+        + (
+            f"\n\n[Your own earlier automated signal note for {sym} — you generated this, it's not "
+            f"from anyone else. Speak to it naturally if asked, in plain sentences, never as a data "
+            f"dump.]\nWhat you noted: {enriched.get('analyst_note', 'nothing noted yet')}\n"
+            f"News context you had: {enriched.get('news_summary', 'none')}\n"
+            f"Risks you flagged: {enriched.get('key_risks', 'none')}"
+            if enriched else ""
+        )
         + f"\n\n[Trade levels for the current signal — these are the ACTUAL computed numbers, "
         + "the same ones shown on the dashboard's Agent Report panel. When you discuss this "
         + "signal or suggest a trade, state these exact dollar amounts — never speak only in "
@@ -1694,79 +1579,31 @@ def _live_system_context() -> str:
     return "\n".join(lines) if lines else "No live system data available."
 
 
-_LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
-_OPERATOR_MEMORY_PATH = os.path.join(_LOGS_DIR, "crypto_operator_memory.jsonl")
-_MEMORY_RECALL = 12  # how many past exchanges to fold back into context
+# Memory + core identity now live in hermes_persona.py, shared with
+# signal_agent/enricher.py's automated enrichment — same brain, same
+# memory, whether it's chatting with the client or generating an automated
+# signal note (see hermes_persona.py's module docstring for why).
+def _operator_memory_recall() -> str:
+    return hermes_persona.memory_recall()
 
 
-def _persona_memory_recall(path: str) -> str:
-    """Best-effort read of recent past exchanges, persisted server-side
-    across sessions/reloads (the client's own history[] only lives in the
-    browser tab). Takes a path rather than being hardcoded to one file since
-    this used to serve two separate personas (operator + tutor, merged back
-    into one 2026-07-23) — kept generic in case a future persona needs its
-    own memory file again. Missing/unreadable file just means no memory
-    yet."""
-    try:
-        p = Path(path)
-        if not p.exists():
-            return ""
-        lines = p.read_text().strip().splitlines()[-_MEMORY_RECALL:]
-        recalled = []
-        for line in lines:
-            try:
-                rec = json.loads(line)
-                recalled.append(f"[{rec.get('ts', '')}] user: {rec.get('user', '')}\nagent: {rec.get('agent', '')}")
-            except Exception:
-                continue
-        return "\n\n".join(recalled)
-    except Exception:
-        return ""
+def _operator_memory_append(user_msg: str, reply: str) -> None:
+    hermes_persona.memory_append(user_msg, reply)
 
 
-_MEMORY_MAX_LINES = 2000  # rotation cap — well above _MEMORY_RECALL(12), just bounds disk growth
+_CRYPTO_OPERATOR_SYSTEM_PROMPT = hermes_persona.HERMES_CORE_IDENTITY + """
 
-
-def _persona_memory_append(path: str, user_msg: str, agent_reply: str) -> None:
-    """Append this exchange to one persona's persistent memory log.
-    Best-effort — a write failure here should never break the chat
-    response itself. Rotates the file down to the most recent
-    _MEMORY_MAX_LINES entries whenever it grows past that, so an
-    append-only log with no cap doesn't grow disk usage unbounded on a
-    long-running deployment — recall only ever reads the last
-    _MEMORY_RECALL lines anyway, so this never affects what the persona
-    remembers, only how much history sits on disk beyond that."""
-    try:
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "a") as f:
-            f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "user": user_msg,
-                "agent": agent_reply,
-            }) + "\n")
-        if p.stat().st_size > 0:
-            lines = p.read_text().splitlines()
-            if len(lines) > _MEMORY_MAX_LINES:
-                p.write_text("\n".join(lines[-_MEMORY_MAX_LINES:]) + "\n")
-    except Exception as e:
-        logger.warning(f"[chat] memory append failed for {path} (non-fatal): {e}")
-
-
-_CRYPTO_OPERATOR_SYSTEM_PROMPT = """You are the Crypto Operator Agent — the Antigravity Predictor dashboard's
-chat box, wired directly to the system's live back engine. You are a
-dedicated counterpart for this client, who communicates primarily in
-Spanish, using crypto slang and informal market jargon. Respond in Spanish
-by default, matching a natural, competent-operator register; follow the
+On the dashboard, you're wired directly to the system's live back engine,
+talking with a dedicated client who communicates primarily in Spanish,
+using crypto slang and informal market jargon. Respond in Spanish by
+default, matching a natural, competent-operator register; follow the
 client if they switch language.
 
-You run isolated: your conversation memory and reasoning workspace are
-your own, not shared with any other agent on this system. That isolation
-is about memory/workspace, not data — you ARE given real, current engine
-data every turn (signal, probabilities, position, stats, feature-gate
-health) below, and you should use it directly rather than hedge about
-signals you've actually been given. If something isn't in the context
-you were given this turn, say so rather than inferring or fabricating it.
+You ARE given real, current engine data every turn (signal, probabilities,
+position, stats, feature-gate health) below, and you should use it
+directly rather than hedge about signals you've actually been given. If
+something isn't in the context you were given this turn, say so rather
+than inferring or fabricating it.
 
 Core traits, non-negotiable:
 - Patient: never rush the client or make them feel slow for asking again.
@@ -1779,16 +1616,10 @@ Core traits, non-negotiable:
   resolved it yourself. Offer the 2-3 readings you're choosing between
   when that's useful so the client can just point at one.
 
-Boundaries:
-- You do not execute trades, place orders, or connect to any exchange,
-  wallet, or account — you have no mechanism to, not just a policy not to.
+Boundaries beyond the ones above:
 - No directive financial instructions ("comprá ahora"). Lay out reasoning
   and tradeoffs; state your own read plainly when asked ("si me
   preguntás, yo creo que...") without dressing it up as a command.
-- Never fabricate data, prices, or sources. State your confidence level
-  explicitly rather than defaulting to uniform false confidence.
-- Never claim to have executed, scheduled, or changed anything — you
-  can't; this conversation is the entirety of what you're connected to.
 
 You understand common Spanish-language crypto slang (ballena, rugpull,
 hodlear, shitcoin, pump y dump, farmear, en verde/en rojo, lunear, manos
@@ -1810,15 +1641,12 @@ the BTC short threshold back toward the F1-optimal value if you want fewer,
 higher-conviction signals") but you cannot apply them — say so, and point to
 which script/config field would need editing. Be honest about uncertainty:
 if confidence is low, a feature family is degraded, or a metric looks weak
-(low precision), say so plainly rather than hedging vaguely."""
+(low precision), say so plainly rather than hedging vaguely.
 
-
-def _operator_memory_recall() -> str:
-    return _persona_memory_recall(_OPERATOR_MEMORY_PATH)
-
-
-def _operator_memory_append(user_msg: str, reply: str) -> None:
-    _persona_memory_append(_OPERATOR_MEMORY_PATH, user_msg, reply)
+You also occasionally generate automated signal notes on this same system
+when a threshold fires (no client present for those) — if the client asks
+about "your earlier note" on a signal, that's you; answer naturally rather
+than acting like it was someone else."""
 
 
 @app.get("/api/chat/status")

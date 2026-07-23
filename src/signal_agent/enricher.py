@@ -5,20 +5,44 @@ Given a Predictor snapshot for one asset, this module:
   1. Searches for recent news about the asset and macro environment.
   2. Calls the configured LLM backend with both the quantitative signal and the news.
   3. Returns a structured EnrichedSignal dict ready to POST to the Predictor.
+
+This is the SAME Hermes brain as the dashboard's interactive chat
+(predictor_server.py's /api/chat) — same backend-resolution module
+(llm_backend.py, CHAT_BACKEND-driven), same core identity/memory
+(hermes_persona.py). It used to be a fully separate implementation (its own
+call_claude/call_ollama/call_openai_compatible, its own SA_INFERENCE_BACKEND-
+driven backend selection) that had already drifted from the chat's version
+(no native Anthropic support here, different env vars) — merged 2026-07-23
+so there's one implementation of "call an LLM backend" instead of two to
+keep in sync by hand.
+
+The dashboard's Agent Report panel needs specific fields to render (signal/
+confidence_label/news_summary/key_risks/analyst_note), so the OUTPUT of
+this module stays structured JSON on the wire — but that JSON is purely
+internal plumbing between this process and predictor_server.py's
+/api/enriched-signal/{asset} endpoint. The dashboard (dashboard/app.js)
+parses each field into its own styled UI element (setText calls) and never
+renders raw JSON to the client; nothing JSON-shaped gets written into
+Hermes's shared memory either (see hermes_persona.record_enrichment_digest)
+— the client never "speaks JSON" anywhere in this pipeline.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
-
 from loguru import logger
 
 from .config import SignalAgentConfig
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # src/
+import llm_backend  # noqa: E402
+import hermes_persona  # noqa: E402
 
 
 # ── News fetching ─────────────────────────────────────────────────────────────
@@ -91,10 +115,13 @@ def fetch_news(asset: str, cfg: SignalAgentConfig) -> list[dict]:
 
 # ── LLM synthesis ──────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """\
-You are a concise, factual crypto trading signal analyst for an advisory-only system.
+_SYSTEM_PROMPT = hermes_persona.HERMES_CORE_IDENTITY + """
 
-Your role is to synthesize a quantitative model output with recent market news into a structured signal brief. You do NOT give financial advice. You flag uncertainty clearly. You are brief — the dashboard has limited space.
+Right now you're not chatting with the client — you've been triggered automatically because a signal
+crossed its confidence threshold, and there's no one here to ask a clarifying question of. Synthesize the
+quantitative model output below with recent market news into a structured signal brief for the dashboard's
+Agent Report panel. Be brief — the panel has limited space. Flag uncertainty clearly rather than sounding
+confident when you're not.
 
 Output ONLY valid JSON matching this schema (no markdown, no prose outside JSON):
 {
@@ -112,6 +139,9 @@ Rules:
 - If news strongly contradicts the model signal, flag it in analyst_note.
 - Never promise profits. Never mention specific price targets.
 - If news is unavailable or thin, say so in news_summary.
+- This JSON is read by predictor_server.py's own code, never shown to the client as JSON — each field
+  gets rendered into its own place on the Agent Report panel. Every string field is still displayed as
+  text, though, so write each one in plain, client-readable language.
 """
 
 
@@ -161,107 +191,35 @@ def _parse_llm_response(raw: str) -> dict:
     return json.loads(raw)
 
 
-def call_claude(prompt: str, cfg: SignalAgentConfig) -> dict:
-    """Call the Anthropic Claude API."""
-    try:
-        import anthropic  # type: ignore
-    except ImportError:
-        logger.error("anthropic package not installed. pip install anthropic")
-        return _fallback_signal("anthropic package missing")
+def call_hermes_brain(prompt: str, cfg: SignalAgentConfig) -> dict:
+    """
+    Calls the shared Hermes brain (llm_backend.call_llm — same backend
+    resolution as the dashboard chat, driven by CHAT_BACKEND/HERMES_PROXY_URL/
+    ANTHROPIC_API_KEY/OLLAMA_URL, not SignalAgentConfig's own now-vestigial
+    hermes_proxy_url/ollama_url/claude_model fields, which stay in config.py
+    for config.json backward-compatibility but are no longer what actually
+    gets called — env vars are the one source of truth for backend choice,
+    same as /api/chat). Recalls shared memory first, so an automated note
+    can be informed by recent chat/enrichment history the same way the chat
+    side recalls it for conversations.
+    """
+    memory = hermes_persona.memory_recall()
+    system_ctx = _SYSTEM_PROMPT
+    if memory:
+        system_ctx += f"\n\n[Recalled memory — recent chat/enrichment history]\n{memory}"
 
-    if not cfg.anthropic_api_key:
-        logger.error("ANTHROPIC_API_KEY not set — cannot synthesize signal.")
-        return _fallback_signal("no API key")
+    result = llm_backend.call_llm(system_ctx, prompt, cfg=llm_backend.backend_config(), max_tokens=512)
+    if not result:
+        logger.error("No LLM backend configured/reachable for signal-agent enrichment.")
+        return _fallback_signal("no LLM backend configured/reachable")
 
     try:
-        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-        response = client.messages.create(
-            model=cfg.claude_model,
-            max_tokens=512,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text
-        return _parse_llm_response(raw)
+        parsed = _parse_llm_response(result["reply"])
+        parsed["_source"] = result["source"]
+        return parsed
     except json.JSONDecodeError as e:
-        logger.error(f"Claude returned invalid JSON: {e}")
+        logger.error(f"{result['source']} returned invalid JSON: {e}")
         return _fallback_signal(f"JSON parse error: {e}")
-    except Exception as e:
-        logger.error(f"Claude API call failed: {e}")
-        return _fallback_signal(str(e))
-
-
-def call_ollama(prompt: str, cfg: SignalAgentConfig) -> dict:
-    """
-    Call a local Ollama instance via its OpenAI-compatible /v1/chat/completions endpoint.
-    No API key required — just needs Ollama running locally with the model pulled.
-
-    Quick setup:
-        ollama pull llama3.1          # or any model you prefer
-        ollama serve                  # starts on http://localhost:11434
-    Then set: SA_INFERENCE_BACKEND=ollama
-    """
-    url = f"{cfg.ollama_url.rstrip('/')}/v1/chat/completions"
-    payload = {
-        "model": cfg.ollama_model,
-        "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user",   "content": prompt},
-        ],
-        "max_tokens": 512,
-        "temperature": 0.2,   # Low temperature for consistent JSON output
-        "stream": False,
-    }
-    try:
-        resp = requests.post(url, json=payload, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        raw  = data["choices"][0]["message"]["content"]
-        return _parse_llm_response(raw)
-    except json.JSONDecodeError as e:
-        logger.error(f"Ollama returned invalid JSON: {e}")
-        return _fallback_signal(f"Ollama JSON parse error: {e}")
-    except Exception as e:
-        logger.error(f"Ollama call failed ({cfg.ollama_url}, model={cfg.ollama_model}): {e}")
-        return _fallback_signal(f"Ollama error: {e}")
-
-
-def call_openai_compatible(prompt: str, cfg: SignalAgentConfig) -> dict:
-    """Call Hermes proxy or any OpenAI-compatible chat/completions endpoint."""
-    base_url = cfg.hermes_proxy_url.rstrip("/")
-    url = f"{base_url}/chat/completions"
-    payload = {
-        "model": cfg.hermes_inference_model,
-        "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": 512,
-        "temperature": 0.2,
-        "stream": False,
-    }
-    headers = {
-        "Authorization": f"Bearer {cfg.hermes_proxy_api_key or 'local'}",
-        "Content-Type": "application/json",
-    }
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        message = data["choices"][0].get("message", {})
-        raw = message.get("content") or message.get("reasoning") or ""
-        if isinstance(raw, list):
-            raw = "".join(str(part.get("text", part)) if isinstance(part, dict) else str(part) for part in raw)
-        raw = str(raw).strip()
-        if not raw:
-            raise ValueError("OpenAI-compatible backend returned empty message content")
-        return _parse_llm_response(raw)
-    except json.JSONDecodeError as e:
-        logger.error(f"OpenAI-compatible backend returned invalid JSON: {e}")
-        return _fallback_signal(f"OpenAI-compatible JSON parse error: {e}")
-    except Exception as e:
-        logger.error(f"OpenAI-compatible call failed ({base_url}, model={cfg.hermes_inference_model}): {e}")
-        return _fallback_signal(f"OpenAI-compatible error: {e}")
 
 
 def _fallback_signal(reason: str) -> dict:
@@ -293,28 +251,26 @@ def enrich(asset: str, snapshot: dict, cfg: SignalAgentConfig) -> dict:
 
     prompt = _build_user_prompt(asset, snapshot, news)
 
+    # SA_INFERENCE_BACKEND is now purely an on/off switch for enrichment --
+    # which backend actually answers is CHAT_BACKEND/llm_backend.py's job,
+    # same as the dashboard chat. Any non-disabled value here just means
+    # "enabled"; the specific values (claude/ollama/openai_compatible) that
+    # used to also select a backend are accepted for backward compatibility
+    # with existing .env files but no longer change what gets called.
     backend = cfg.inference_backend.lower()
     if backend in {"disabled", "none", "off"}:
         logger.info(f"[enricher] Enrichment disabled for {asset}; returning neutral fallback.")
         result = _fallback_signal("LLM enrichment disabled")
-    elif backend in {"openai_compatible", "hermes", "hermes_proxy"}:
-        logger.info(f"[enricher] Calling OpenAI-compatible backend ({cfg.hermes_proxy_url}, model={cfg.hermes_inference_model}) for {asset}…")
-        t1 = time.monotonic()
-        result = call_openai_compatible(prompt, cfg)
-        logger.info(f"[enricher] OpenAI-compatible backend responded in {time.monotonic()-t1:.1f}s")
-    elif backend == "ollama":
-        logger.info(f"[enricher] Calling Ollama ({cfg.ollama_url}, model={cfg.ollama_model}) for {asset}…")
-        t1 = time.monotonic()
-        result = call_ollama(prompt, cfg)
-        logger.info(f"[enricher] Ollama responded in {time.monotonic()-t1:.1f}s")
-    elif backend == "claude":
-        logger.info(f"[enricher] Calling Claude ({cfg.claude_model}) for {asset}…")
-        t1 = time.monotonic()
-        result = call_claude(prompt, cfg)
-        logger.info(f"[enricher] Claude responded in {time.monotonic()-t1:.1f}s")
     else:
-        logger.error(f"Unknown inference backend: {cfg.inference_backend}")
-        result = _fallback_signal(f"unknown backend: {cfg.inference_backend}")
+        logger.info(f"[enricher] Calling Hermes brain for {asset}…")
+        t1 = time.monotonic()
+        result = call_hermes_brain(prompt, cfg)
+        logger.info(f"[enricher] Hermes brain responded in {time.monotonic()-t1:.1f}s (source={result.get('_source', 'fallback')})")
+
+    # _source is an internal marker (which backend actually answered) used
+    # for logging/memory-gating below — never part of the wire payload the
+    # dashboard consumes, so it's popped before attaching the rest.
+    had_real_reply = bool(result.pop("_source", None))
 
     # Attach metadata
     result["asset"] = asset
@@ -324,5 +280,8 @@ def enrich(asset: str, snapshot: dict, cfg: SignalAgentConfig) -> dict:
     result["news_count"]        = len(news)
     if "generated_at" not in result:
         result["generated_at"] = datetime.now(timezone.utc).isoformat()
+
+    if had_real_reply:
+        hermes_persona.record_enrichment_digest(asset, result)
 
     return result
