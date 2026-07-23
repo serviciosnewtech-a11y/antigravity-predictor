@@ -451,6 +451,8 @@ class AssetEngine:
         self.latest_prediction_long  = 0.0
         self.latest_prediction_short = 0.0
         self.latest_signal = "NEUTRAL"
+        self.latest_close: float | None = None   # last traded close, for chat price-level math
+        self.latest_atr: float | None = None      # last atr_proxy, for chat price-level math
         self.position = None
         self.trades_history: list[dict] = []
         self.total_pnl   = 0.0
@@ -683,7 +685,9 @@ class AssetEngine:
                     self.latest_signal = "NEUTRAL"
 
             last = feats.iloc[-1]
-            self._update_sim(float(last["close"]), last["time"], float(last["atr_proxy"]), confirm)
+            self.latest_close = float(last["close"])
+            self.latest_atr   = float(last["atr_proxy"])
+            self._update_sim(self.latest_close, last["time"], self.latest_atr, confirm)
 
             asyncio.run_coroutine_threadsafe(
                 manager.broadcast({
@@ -1200,6 +1204,52 @@ class _ChatRequest(BaseModel):
     history: List[_ChatMsg] = []
 
 
+def _compute_price_levels(signal: str, close: float, atr: float) -> Optional[dict]:
+    """
+    Server-side mirror of dashboard/app.js's updatePriceLevels() — same
+    multipliers as the training labels (TP1=1.5xATR, TP2=2.5xATR, SL=1.0xATR)
+    and the same ~0.15% round-trip fee drag, so a number the chat states
+    matches the number the dashboard's Agent Report panel shows for the same
+    tick. Returns None for NEUTRAL/UNAVAILABLE/EXIT or missing close/atr —
+    there's no valid entry to size in those states, and the chat should say
+    so rather than inventing numbers.
+    """
+    if signal not in ("BUY", "SELL") or not close or not atr or atr <= 0:
+        return None
+    is_long = signal == "BUY"
+    tp1_mult, tp2_mult, sl_mult = 1.5, 2.5, 1.0
+    fee_drag = close * 0.0015
+    if is_long:
+        entry = close
+        sl  = close - sl_mult  * atr - fee_drag
+        tp1 = close + tp1_mult * atr - fee_drag
+        tp2 = close + tp2_mult * atr - fee_drag
+    else:
+        entry = close
+        sl  = close + sl_mult  * atr + fee_drag
+        tp1 = close - tp1_mult * atr + fee_drag
+        tp2 = close - tp2_mult * atr + fee_drag
+    risk   = abs(entry - sl)
+    reward = abs(tp1 - entry)
+    rr     = round(reward / risk, 2) if risk > 0 else None
+    return {
+        "entry": round(entry, 2), "stop_loss": round(sl, 2),
+        "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+        "atr": round(atr, 2), "risk_reward_tp1": rr,
+    }
+
+
+def _format_price_levels_for_prompt(levels: Optional[dict]) -> str:
+    if not levels:
+        return "No active BUY/SELL signal right now, so there is no entry/stop-loss/take-profit to state — say so plainly rather than inventing numbers."
+    rr_str = f"{levels['risk_reward_tp1']}:1" if levels['risk_reward_tp1'] else "n/a"
+    return (
+        f"Entry ${levels['entry']:,.2f} | Stop Loss ${levels['stop_loss']:,.2f} | "
+        f"TP1 (1.5x ATR) ${levels['tp1']:,.2f} | TP2 (2.5x ATR) ${levels['tp2']:,.2f} | "
+        f"ATR ${levels['atr']:,.2f} | R:R (to TP1) {rr_str}"
+    )
+
+
 def _backend_config(prefix: str) -> dict:
     """
     Resolve (proxy_url, proxy_key, proxy_model, ollama_url, ollama_model) for
@@ -1299,7 +1349,10 @@ async def hermes_chat(req: _ChatRequest):
         short_prob = eng.latest_prediction_short
         pos        = eng.position
         stats      = eng._stats()
+        close      = eng.latest_close
+        atr        = eng.latest_atr
 
+    price_levels = _compute_price_levels(signal, close, atr)
     enriched   = _enriched_signals.get(sym, {})
     pos_str    = (
         f"{pos['type']} @ {pos['entry_price']:.2f} | TP {pos['tp']:.2f} | SL {pos['sl']:.2f}"
@@ -1324,6 +1377,10 @@ async def hermes_chat(req: _ChatRequest):
         + f"total_trades={stats['total_trades']}, win_trades={stats['win_trades']}, "
         + f"net_pnl={stats['total_pnl']:.2f} USDT. "
         + f"Enriched context: {enriched.get('analyst_note', 'none')}."
+        + f"\n\n[Trade levels for the current signal — these are the ACTUAL computed numbers, "
+        + "the same ones shown on the dashboard's Agent Report panel. When you discuss this "
+        + "signal or suggest a trade, state these exact dollar amounts — never speak only in "
+        + f"qualitative terms when real numbers are available.]\n{_format_price_levels_for_prompt(price_levels)}"
         + f"\n\n[Full system context — read-only]\n{_live_system_context()}"
         + (f"\n\n[Recalled memory from earlier conversations with this client]\n{memory_recall}" if memory_recall else "")
         + f"\n\n[Language]\n{language_rule}"
@@ -1336,6 +1393,7 @@ async def hermes_chat(req: _ChatRequest):
             "reply": result["reply"],
             "source": result["source"],
             "signal": signal,
+            "price_levels": price_levels,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -1591,7 +1649,10 @@ async def hermes_tutor_chat(req: _ChatRequest):
         signal     = eng.latest_signal
         long_prob  = eng.latest_prediction_long
         short_prob = eng.latest_prediction_short
+        close      = eng.latest_close
+        atr        = eng.latest_atr
 
+    price_levels = _compute_price_levels(signal, close, atr)
     lang = "es" if str(req.language).lower().startswith("es") else "en"
     language_rule = (
         "Respond in Spanish. " if lang == "es" else "Respond in English. "
@@ -1602,6 +1663,9 @@ async def hermes_tutor_chat(req: _ChatRequest):
         _TUTOR_SYSTEM_PROMPT
         + f"\n\n[Live signal context]\nAsset in view: {sym}. Current signal: {signal}. "
         + f"long_prob={long_prob:.4f}, short_prob={short_prob:.4f}."
+        + f"\n\n[Trade levels for the current signal — the ACTUAL computed numbers, same as the "
+        + "dashboard's Agent Report panel. Cite these exact figures when explaining the signal "
+        + f"or answering a performance/what-if question.]\n{_format_price_levels_for_prompt(price_levels)}"
         + f"\n\n[Full system context — read-only, you cannot change any of this]\n{_live_system_context()}"
         + f"\n\n[Model performance context]\n{_model_performance_context()}"
         + (f"\n\n[Recalled memory from earlier conversations with this operator]\n{memory_recall}" if memory_recall else "")
@@ -1615,6 +1679,7 @@ async def hermes_tutor_chat(req: _ChatRequest):
             "reply": result["reply"],
             "source": result["source"],
             "signal": signal,
+            "price_levels": price_levels,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
