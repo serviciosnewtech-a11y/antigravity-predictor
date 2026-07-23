@@ -18,7 +18,8 @@ WorkingDirectory=/opt/predictor/src
 # All vars come from /opt/predictor/.env — never hardcode keys here.
 EnvironmentFile=-/opt/predictor/.env
 
-# Predictor is the Docker container, exposed on the host at port 18910.
+# Predictor runs as predictor.service on this same bare-metal host,
+# listening on 127.0.0.1:18910 — no Docker involved.
 Environment=PREDICTOR_URL=http://127.0.0.1:18910
 
 # CRITICAL: threshold must match actual LightGBM output range (0.18-0.28).

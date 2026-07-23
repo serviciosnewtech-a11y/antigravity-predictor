@@ -12,3 +12,5 @@ pytest>=7.0.0
 ccxt>=4.0.0
 pyarrow>=14.0.0
 yfinance>=0.2.40
+anthropic>=0.30.0
+duckduckgo-search>=6.0.0

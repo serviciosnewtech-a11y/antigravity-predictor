@@ -10,6 +10,16 @@ User=predictor
 Group=predictor
 WorkingDirectory=/opt/predictor/src
 
+# GOLD_PARQUET_PATH defaults to the relative path "data/macro/gold.parquet"
+# in predictor_server.py, which resolves against WorkingDirectory (src/) —
+# i.e. /opt/predictor/src/data/macro/gold.parquet. macro_refresh.service
+# actually writes to /opt/predictor/data/macro (a sibling of src/, not a
+# child), so without this override the gold/XAU feature would silently and
+# permanently find nothing (the lookup is exists()-guarded, so it degrades
+# quietly rather than crashing — easy to miss). Found during pre-redeploy
+# verification.
+Environment=GOLD_PARQUET_PATH=/opt/predictor/data/macro/gold.parquet
+
 # Use the venv if present, otherwise system python
 ExecStart=/opt/predictor/.venv/bin/python predictor_server.py
 ExecReload=/bin/kill -HUP $MAINPID

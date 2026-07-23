@@ -30,14 +30,25 @@ fi
 
 # ── Copy app files ────────────────────────────────────────────────────────────
 log "Copying app to $APP_DIR…"
-mkdir -p "$APP_DIR"/{src,models,data/{raw,macro,datasets},logs,deploy/bare-metal}
+mkdir -p "$APP_DIR"/{src,models,dashboard,data/{raw,macro,datasets},logs,deploy/bare-metal}
 
 rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
     "$REPO_SRC/src/"     "$APP_DIR/src/"
 rsync -a "$REPO_SRC/models/"  "$APP_DIR/models/" 2>/dev/null || true
 rsync -a "$REPO_SRC/deploy/bare-metal/"  "$APP_DIR/deploy/bare-metal/"
+# dashboard/ (index.html/app.js/style.css) — predictor_server.py mounts this
+# via FastAPI StaticFiles at "/". Without this copy the mount silently no-ops
+# (guarded by an os.path.exists check) and nginx's "location /" proxy gets a
+# 404 from FastAPI for every request — the dashboard would never load on a
+# fresh install. Found during pre-redeploy verification, not a live incident.
+rsync -a "$REPO_SRC/dashboard/"  "$APP_DIR/dashboard/"
 cp    "$REPO_SRC/retrain_all.sh" "$APP_DIR/"
 cp    "$REPO_SRC/requirements.txt" "$APP_DIR/" 2>/dev/null || true
+# config.json — predictor_server.py hard-requires this (raises and refuses to
+# start if missing from both src/config.json and $APP_DIR/config.json). This
+# copy step was missing entirely, which would have crash-looped predictor.service
+# on every fresh install. Found during pre-redeploy verification.
+cp    "$REPO_SRC/config.json" "$APP_DIR/config.json"
 
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 chmod +x "$APP_DIR/retrain_all.sh"
