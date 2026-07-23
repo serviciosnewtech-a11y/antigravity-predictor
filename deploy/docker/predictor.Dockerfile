@@ -12,10 +12,18 @@ COPY deploy/docker/predictor-requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # App source — predictor_server.py imports only stdlib + the deps above,
-# plus feature_gate.py (H-13 P1 fail-loud parity gate). It does NOT import
-# lgbm_poc or signal_agent, so neither is copied/installed.
+# plus feature_gate.py (H-13 P1 fail-loud parity gate) and signal_log.py
+# (durable SQLite signal/trade history, both stdlib-only — sqlite3/threading/
+# pathlib — no extra pip deps needed). Every top-level `import X` in
+# predictor_server.py MUST have a matching COPY line here, or the container
+# crash-loops on ModuleNotFoundError at startup — signal_log.py itself was
+# missing here for a while after it was added (never caught because pytest
+# runs against the full repo checkout, not the built image; only a real
+# `docker compose build && up` catches this class of bug). It does NOT
+# import lgbm_poc or signal_agent, so neither is copied/installed.
 COPY src/predictor_server.py  src/predictor_server.py
 COPY src/feature_gate.py      src/feature_gate.py
+COPY src/signal_log.py        src/signal_log.py
 COPY config.json              src/config.json
 COPY dashboard/               dashboard/
 
