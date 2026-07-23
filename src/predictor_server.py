@@ -21,6 +21,7 @@ import websockets
 from typing import Optional, List
 
 from feature_gate import evaluate_feature_parity, format_gate_log_summary
+import signal_log
 
 # ── Config ───────────────────────────────────────────────────────────────────
 # src/config.json is normally created by run_monolith.sh/run_local.sh (which
@@ -485,6 +486,35 @@ class AssetEngine:
         self.feature_names = self.model_long.feature_name()
         logger.success(f"[{self.symbol}] Models loaded — {len(self.feature_names)} features.")
 
+    def load_history(self):
+        """Reseed trade stats/history from signal_log's durable SQLite store
+        so a restart doesn't visibly wipe a symbol's whole trading record
+        back to zero — same numbers as before the restart, just no longer
+        memory-only. Best-effort: a fresh install with no prior history is
+        expected to come back empty, that's not an error."""
+        try:
+            stats = signal_log.get_stats(self.symbol)
+            self.total_pnl   = stats["total_pnl"]
+            self.win_trades  = stats["win_trades"]
+            self.loss_trades = stats["loss_trades"]
+            rows = signal_log.get_trades(self.symbol, limit=200)
+            # DB returns newest-first; trades_history is expected oldest-first
+            # (matches append-on-close order), so reverse before loading.
+            self.trades_history = [
+                {
+                    "symbol": r["symbol"], "type": r["direction"],
+                    "entry_time": r["entry_time"], "exit_time": r["exit_time"],
+                    "entry_price": r["entry_price"], "exit_price": r["exit_price"],
+                    "pnl": r["pnl_usdt"], "pnl_pct": r["pnl_pct"], "reason": r["exit_reason"],
+                }
+                for r in reversed(rows)
+            ]
+            if self.trades_history:
+                logger.info(f"[{self.symbol}] Restored {len(self.trades_history)} trades from durable history "
+                            f"({self.win_trades}W/{self.loss_trades}L, {self.total_pnl:+.2f} USDT total).")
+        except Exception as ex:
+            logger.error(f"[{self.symbol}] Could not restore trade history from signal_log (starting empty): {ex}")
+
     def fetch_initial_candles(self):
         sym = self.symbol.replace("/", "")
         url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval={TF_MINS}&limit=150"
@@ -711,6 +741,24 @@ class AssetEngine:
             )
             if confirm and old_sig != self.latest_signal:
                 logger.info(f"[{self.symbol}] Signal: {self.latest_signal} | L={self.latest_prediction_long:.4f} S={self.latest_prediction_short:.4f}")
+
+            if confirm:
+                # Full activity log, every confirmed tick — not just
+                # transitions. A transition-only log would miss most of the
+                # actual signal (e.g. hours of NEUTRAL between two BUYs),
+                # and this data's whole purpose is to eventually support
+                # retraining/threshold-calibration work, which needs the
+                # continuous prediction trajectory, not just the moments it
+                # changed.
+                try:
+                    ts_int = int(last["time"].timestamp()) if hasattr(last["time"], "timestamp") else int(last["time"])
+                    signal_log.record_signal_event(
+                        ts=ts_int, symbol=self.symbol, signal=self.latest_signal,
+                        long_prob=self.latest_prediction_long, short_prob=self.latest_prediction_short,
+                        price=self.latest_close, atr=self.latest_atr, degraded=self.degraded,
+                    )
+                except Exception as log_ex:
+                    logger.error(f"[{self.symbol}] signal_log.record_signal_event failed (tick NOT durably saved): {log_ex}")
         except Exception as ex:
             logger.error(f"[{self.symbol}] prediction error: {ex}")
 
@@ -750,7 +798,7 @@ class AssetEngine:
                 if pnl >= 0: self.win_trades += 1
                 else: self.loss_trades += 1
                 ts_int = int(ts.timestamp()) if hasattr(ts, "timestamp") else int(ts)
-                self.trades_history.append({
+                trade_row = {
                     "symbol": self.symbol,
                     "type": pos["type"],
                     "entry_time": pos["entry_time"],
@@ -760,7 +808,15 @@ class AssetEngine:
                     "pnl": pnl_usdt,
                     "pnl_pct": pnl,
                     "reason": reason,
-                })
+                }
+                self.trades_history.append(trade_row)
+                try:
+                    signal_log.record_trade(trade_row)
+                except Exception as log_ex:
+                    # Never let a logging failure break live trading logic —
+                    # but do surface it loudly, since this is the exact kind
+                    # of silent-data-loss this module exists to prevent.
+                    logger.error(f"[{self.symbol}] signal_log.record_trade failed (trade NOT durably saved): {log_ex}")
                 logger.success(f"[{self.symbol}] {pos['type']} EXIT | {reason} | PnL {pnl_usdt:+.2f} USDT")
                 self.position = None
         elif confirm:
@@ -875,8 +931,10 @@ def run_ws_loop():
 # ── Startup ───────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def startup_event():
+    signal_log.init_db()
     for eng in engines.values():
         eng.load_models()
+        eng.load_history()
         eng.fetch_initial_candles()
     threading.Thread(target=run_ws_loop, daemon=True).start()
     logger.success("All engines started — Predictor v2 online.")
@@ -1071,6 +1129,48 @@ def get_status(symbol: Optional[str] = Query(default=None)):
             } for sym, eng in engines.items()
         }
     }
+
+
+@app.get("/api/signal-history")
+def get_signal_history(symbol: Optional[str] = Query(default=None),
+                        limit: int = Query(default=500, le=5000),
+                        format: str = Query(default="json")):
+    """Full durable activity log — every confirmed prediction tick (not
+    just BUY/SELL transitions), independent of process restarts. This is
+    the raw material for retraining/threshold-calibration work, not just a
+    live dashboard number. Backed by signal_log.py / logs/signal_history.db.
+    """
+    rows = signal_log.get_signal_events(symbol=symbol, limit=limit)
+    if format == "csv":
+        import csv, io
+        buf = io.StringIO()
+        if rows:
+            w = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                                  headers={"Content-Disposition": "attachment; filename=signal_history.csv"})
+    return {"symbol": symbol, "count": len(rows), "events": rows}
+
+
+@app.get("/api/trade-history")
+def get_trade_history(symbol: Optional[str] = Query(default=None),
+                       limit: int = Query(default=500, le=5000),
+                       format: str = Query(default="json")):
+    """Full durable record of every completed simulated trade, independent
+    of process restarts. See /api/signal-history for the underlying every-
+    tick log this is derived from."""
+    rows = signal_log.get_trades(symbol=symbol, limit=limit)
+    if format == "csv":
+        import csv, io
+        buf = io.StringIO()
+        if rows:
+            w = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                                  headers={"Content-Disposition": "attachment; filename=trade_history.csv"})
+    return {"symbol": symbol, "count": len(rows), "trades": rows}
 
 
 @app.get("/api/feature-parity/{symbol}")
