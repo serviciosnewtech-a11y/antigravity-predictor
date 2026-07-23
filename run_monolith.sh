@@ -131,10 +131,37 @@ echo "[monolith] Refreshing macro data (gold/oil/dxy/spx/vix), best-effort…"
 # no separate URL config needed for the zero-config case.
 if [[ "${ENABLE_AGENT_RELAY:-false}" == "true" ]]; then
     export AGENT_RELAY_PORT="${AGENT_RELAY_PORT:-8645}"
+
+    # Kill anything already bound to this port before starting a new relay.
+    # Without this, a stale relay process left over from an earlier
+    # deployment/test run (different code, possibly an old buggy version)
+    # can keep answering on this port while the new one silently fails to
+    # bind — predictor then talks to the OLD process and nobody notices,
+    # because startup here doesn't fail loudly either way. This has
+    # actually happened: a fixed relay shipped correctly in a package but
+    # a stale pre-fix process on the target machine kept serving requests.
+    STALE_PID="$(ss -ltnp 2>/dev/null | grep -E ":${AGENT_RELAY_PORT}\b" | grep -oP 'pid=\K[0-9]+' | head -1)"
+    if [[ -n "$STALE_PID" ]]; then
+        echo "[monolith] Port ${AGENT_RELAY_PORT} already has a process on it (pid $STALE_PID) — killing it before starting the new relay."
+        kill "$STALE_PID" 2>/dev/null || true
+        sleep 1
+    fi
+
     echo "[monolith] Starting agent chat relay on :${AGENT_RELAY_PORT} (cmd: ${AGENT_RELAY_CMD:-hermes --profile metis chat -q {prompt}}) …"
     "$PYTHON" "$SCRIPT_DIR/tools/agent_chat_relay.py" &
     PIDS+=($!)
     sleep 1
+
+    # Verify it's actually OUR relay answering, not some other stale
+    # process — the new /health response always has a "live_ok" key;
+    # anything else means something's wrong (old code, or nothing there).
+    RELAY_HEALTH="$(curl -fsS -m 3 "http://127.0.0.1:${AGENT_RELAY_PORT}/health" 2>/dev/null || echo "")"
+    if [[ "$RELAY_HEALTH" != *'"live_ok"'* ]]; then
+        echo "[monolith] WARNING: agent relay on :${AGENT_RELAY_PORT} did not respond with the expected health schema — it may not have started correctly, or something else is bound to that port. Response: ${RELAY_HEALTH:-<no response>}"
+    else
+        echo "[monolith] Agent relay confirmed responding on :${AGENT_RELAY_PORT}."
+    fi
+
     if [[ -z "${HERMES_PROXY_URL:-}" ]]; then
         export HERMES_PROXY_URL="http://127.0.0.1:${AGENT_RELAY_PORT}"
         echo "[monolith] HERMES_PROXY_URL was unset — pointing it at the agent relay automatically."
