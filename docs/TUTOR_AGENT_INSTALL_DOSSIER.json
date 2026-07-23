@@ -165,7 +165,7 @@
       "1. Provision a chat-completions-capable model endpoint (local Ollama pull, or a hosted OpenAI-compatible endpoint) with no tools/functions registered.",
       "2. Confirm it responds correctly to a bare curl test matching the request_schema for whichever protocol it speaks (see verification_checklist below for exact commands).",
       "3. Set TUTOR_OLLAMA_URL (or TUTOR_HERMES_PROXY_URL + TUTOR_HERMES_PROXY_API_KEY) in .env on the machine running the predictor service to point at it.",
-      "4. Restart the predictor process (Ctrl+C, then bash start.sh again, or restart the systemd unit — see deploy/predictor.service in the package).",
+      "4. Restart the predictor process (Ctrl+C, then bash start.sh again, or restart the systemd unit — see deploy/bare-metal/predictor.service in the package).",
       "5. Verify via GET /api/chat/status that tutor_chat.configured is true and endpoint/model match what was set.",
       "6. Verify via a real POST /api/tutor-chat call (see verification_checklist) that a reply is returned, not a 503."
     ]

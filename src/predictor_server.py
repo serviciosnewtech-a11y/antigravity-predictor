@@ -25,10 +25,10 @@ from feature_gate import evaluate_feature_parity, format_gate_log_summary
 # ── Config ───────────────────────────────────────────────────────────────────
 # src/config.json is normally created by run_monolith.sh/run_local.sh (which
 # sync the repo-root config.json into src/ before launch) or baked in by
-# predictor/Dockerfile's `COPY config.json src/config.json`. Neither of
-# those run before a bare `pytest` invocation from a clean checkout, so
-# fall back to the repo-root copy directly rather than requiring every
-# caller to remember the sync step first.
+# deploy/docker/predictor.Dockerfile's `COPY config.json src/config.json`.
+# Neither of those run before a bare `pytest` invocation from a clean
+# checkout, so fall back to the repo-root copy directly rather than
+# requiring every caller to remember the sync step first.
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(_SRC_DIR, "config.json")
 if not os.path.exists(CONFIG_PATH):

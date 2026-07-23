@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir \
 
 # Install lgbm_poc cleanly (no conflicting top-level files)
 COPY src/lgbm_poc /tmp/lgbm_poc_pkg/lgbm_poc
-COPY predictor/lgbm_poc_setup.py /tmp/lgbm_poc_pkg/setup.py
+COPY deploy/docker/lgbm_poc_setup.py /tmp/lgbm_poc_pkg/setup.py
 RUN pip install --no-cache-dir /tmp/lgbm_poc_pkg
 
 # Copy retrain source files

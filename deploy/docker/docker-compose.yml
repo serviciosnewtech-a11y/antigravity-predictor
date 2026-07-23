@@ -3,8 +3,8 @@ services:
   # ── Dashboard ─────────────────────────────────────────────────────────────
   dashboard:
     build:
-      context: .
-      dockerfile: dashboard/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/dashboard.Dockerfile
     restart: unless-stopped
     ports:
       - "${DASHBOARD_PORT:-80}:80"
@@ -16,10 +16,10 @@ services:
   # ── Predictor ─────────────────────────────────────────────────────────────
   predictor:
     build:
-      context: .
-      dockerfile: predictor/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/predictor.Dockerfile
     restart: unless-stopped
-    env_file: .env
+    env_file: ../../.env
     environment:
       - SA_INFERENCE_BACKEND=${SA_INFERENCE_BACKEND:-disabled}
       - HERMES_PROXY_URL=${HERMES_PROXY_URL:-http://host.docker.internal:8645/v1}
@@ -30,9 +30,9 @@ services:
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       - DASHBOARD_ORIGINS=${DASHBOARD_ORIGINS:-http://localhost,http://127.0.0.1}
     volumes:
-      - ${MODELS_DIR:-./models}:/app/models:ro
-      - ${DATA_DIR:-./data}:/app/data:ro
-      - ${LOGS_DIR:-./logs}:/app/logs
+      - ${MODELS_DIR:-../../models}:/app/models:ro
+      - ${DATA_DIR:-../../data}:/app/data:ro
+      - ${LOGS_DIR:-../../logs}:/app/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -41,10 +41,10 @@ services:
   # ── Executor ──────────────────────────────────────────────────────────────
   executor:
     build:
-      context: .
-      dockerfile: executor/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/executor.Dockerfile
     restart: unless-stopped
-    env_file: .env
+    env_file: ../../.env
     environment:
       - EXCHANGE=${EXCHANGE:-bybit}
       - EXCHANGE_API_KEY=${EXCHANGE_API_KEY:-}
@@ -55,21 +55,21 @@ services:
       - DASHBOARD_ORIGINS=${DASHBOARD_ORIGINS:-http://localhost,http://127.0.0.1}
       - PREDICTOR_URL=http://predictor:18910
     volumes:
-      - ${LOGS_DIR:-./logs}:/app/logs
+      - ${LOGS_DIR:-../../logs}:/app/logs
     networks:
       - antigravity
 
   # ── Forge — strategy testing & evaluation ────────────────────────────────
   forge:
     build:
-      context: .
-      dockerfile: forge/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/forge.Dockerfile
     restart: unless-stopped
     environment:
       - PREDICTOR_WS_URL=ws://predictor:18910/ws
       - ATR_PERIOD=14
     volumes:
-      - ${FORGE_DATA_DIR:-./forge_data}:/app/forge_data
+      - ${FORGE_DATA_DIR:-../../forge_data}:/app/forge_data
     depends_on:
       - predictor
     networks:
@@ -79,10 +79,10 @@ services:
   # ── Signal Agent — Hermes LLM enrichment layer ───────────────────────────────
   signal_agent:
     build:
-      context: .
-      dockerfile: signal_agent/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/signal_agent.Dockerfile
     restart: unless-stopped
-    env_file: .env
+    env_file: ../../.env
     environment:
       # Predictor is on the internal Docker network — never hits nginx.
       - PREDICTOR_URL=http://predictor:18910
@@ -101,7 +101,7 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
-      - ${LOGS_DIR:-./logs}:/app/logs
+      - ${LOGS_DIR:-../../logs}:/app/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -112,16 +112,16 @@ services:
   # ── Retrain (run-once, not always-on) ─────────────────────────────────────
   retrain:
     build:
-      context: .
-      dockerfile: retrain/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/retrain.Dockerfile
     profiles: ["retrain"]          # only starts with: docker compose --profile retrain run --rm retrain
-    env_file: .env
+    env_file: ../../.env
     environment:
       - MIN_AUC=${MIN_AUC:-0.54}
     volumes:
-      - ${MODELS_DIR:-./models}:/app/models
-      - ${DATA_DIR:-./data}:/app/data
-      - ${LOGS_DIR:-./logs}:/app/logs
+      - ${MODELS_DIR:-../../models}:/app/models
+      - ${DATA_DIR:-../../data}:/app/data
+      - ${LOGS_DIR:-../../logs}:/app/logs
     networks:
       - antigravity
 

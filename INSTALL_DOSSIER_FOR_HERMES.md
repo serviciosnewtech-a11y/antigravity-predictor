@@ -37,7 +37,7 @@ Stop immediately and report evidence if any of these are true:
    - `80`
 5. Any step requires sudo, destructive host changes, wiping unknown directories, firewall changes, package installation, credential entry, or production exchange setup.
 6. The GitHub clone does not resolve to the latest public `main`, the `beta-1` tag, or a specific operator-approved commit.
-7. A command fails and the next action is not explicitly covered by this dossier or by `diagnose.sh`.
+7. A command fails and the next action is not explicitly covered by this dossier or by `deploy/docker/diagnose.sh`.
 
 Do not continue under uncertainty. Return a concise blocker report.
 
@@ -108,16 +108,16 @@ latest public main, or a specific commit explicitly approved by the operator
 Then:
 
 ```bash
-bash deploy.sh
+bash deploy/docker/deploy.sh
 ```
 
-Do not manually edit `.env` before the first deploy. `deploy.sh` creates `.env` from `.env.example` if missing and enforces safe demo mode.
+Do not manually edit `.env` before the first deploy. `deploy/docker/deploy.sh` creates `.env` from `.env.example` if missing and enforces safe demo mode.
 
 ---
 
 ## 3. Safety expectations before deploy
 
-After `deploy.sh` creates `.env`, these must be true:
+After `deploy/docker/deploy.sh` creates `.env`, these must be true:
 
 ```env
 DRY_RUN=true
@@ -140,9 +140,9 @@ Do not enable Hermes/Ollama/Anthropic enrichment during the first install test u
 
 ---
 
-## 4. What `deploy.sh` is expected to do
+## 4. What `deploy/docker/deploy.sh` is expected to do
 
-`deploy.sh` should:
+`deploy/docker/deploy.sh` should:
 
 1. create `.env` from `.env.example` if `.env` does not exist
 2. load `.env`
@@ -199,7 +199,7 @@ Exact JSON may include more fields. Do not fail solely because extra fields exis
 
 Browser/UI smoke:
 
-1. Open the dashboard URL printed by `deploy.sh`.
+1. Open the dashboard URL printed by `deploy/docker/deploy.sh`.
 2. Confirm dashboard loads.
 3. Confirm no live-trading activation is required.
 4. Confirm Spanish/English chat UI toggle is visible.
@@ -223,7 +223,7 @@ DRY_RUN=<value from .env>
 EXCHANGE_KEYS_EMPTY=<yes|no>
 INFERENCE_BACKEND=<value from .env>
 DOCKER_ACCESS=<direct|sg docker|blocked>
-DASHBOARD_URL=<url printed by deploy.sh>
+DASHBOARD_URL=<url printed by deploy/docker/deploy.sh>
 
 COMMANDS_RUN:
 - <command 1>
@@ -236,7 +236,7 @@ STATUS_ENDPOINTS:
 /dashboard_proxy=<curl http://localhost/api/status output>
 /executor_health_proxy=<curl http://localhost/executor/health output>
 /forge_health_proxy=<curl http://localhost/forge/health output>
-/backend_host_ports=<diagnose.sh backend_ports_exposed value>
+/backend_host_ports=<deploy/docker/diagnose.sh backend_ports_exposed value>
 
 UI_SMOKE:
 loads=<yes|no|not tested>
@@ -256,13 +256,13 @@ Do not summarize success without the command outputs above.
 
 ## 7. Blocker workflow
 
-If `bash deploy.sh` fails:
+If `bash deploy/docker/deploy.sh` fails:
 
 ```bash
-bash diagnose.sh
+bash deploy/docker/diagnose.sh
 ```
 
-Return the full `diagnose.sh` output.
+Return the full `deploy/docker/diagnose.sh` output.
 
 Do not patch code on the test machine unless the operator explicitly asks. The test machine is for configuration, install verification, runtime checks, and blocker reporting. Source changes belong in the repo workflow and must be pushed from the controller side after diagnosis.
 
@@ -313,7 +313,7 @@ HERMES_PROXY_API_KEY=local
 Then rerun:
 
 ```bash
-bash deploy.sh
+bash deploy/docker/deploy.sh
 ```
 
 This is a separate test. Do not mix optional enrichment debugging with first-pass core deployment.

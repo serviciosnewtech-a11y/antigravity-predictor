@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps (unpinned — latest compatible)
-COPY predictor/requirements.txt /tmp/requirements.txt
+COPY deploy/docker/predictor-requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # App source — predictor_server.py imports only stdlib + the deps above,

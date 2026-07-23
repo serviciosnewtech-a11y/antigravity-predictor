@@ -118,10 +118,11 @@ sleep 4
 
 # ── Start Signal Agent ─────────────────────────────────────────────────────
 # Needs CWD=src/ so `signal_agent` resolves as a top-level importable
-# package (it lives at src/signal_agent/, and there's an unrelated
-# src-level signal_agent/Dockerfile at repo root that would otherwise
-# shadow it). Run in a subshell so this cd doesn't affect the rest of the
-# script — the predictor above needs CWD at the repo root instead.
+# package (it lives at src/signal_agent/; the Docker-only
+# signal_agent.Dockerfile now lives under deploy/docker/, so there's no
+# same-named file at repo root to shadow it). Run in a subshell so this
+# cd doesn't affect the rest of the script — the predictor above needs
+# CWD at the repo root instead.
 if [[ $NO_AGENT -eq 0 ]]; then
     echo "[run_local] Starting Hermes signal agent (backend=$SA_INFERENCE_BACKEND)…"
     (cd "$SRC_DIR" && exec "$PYTHON" -m signal_agent.main) &

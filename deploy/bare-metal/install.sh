@@ -10,7 +10,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/predictor}"
 APP_USER="${APP_USER:-predictor}"
-REPO_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 log() { echo "[INSTALL] $*"; }
 die() { echo "[ERROR] $*"; exit 1; }
@@ -30,12 +30,12 @@ fi
 
 # ── Copy app files ────────────────────────────────────────────────────────────
 log "Copying app to $APP_DIR…"
-mkdir -p "$APP_DIR"/{src,models,data/{raw,macro,datasets},logs,deploy}
+mkdir -p "$APP_DIR"/{src,models,data/{raw,macro,datasets},logs,deploy/bare-metal}
 
 rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
     "$REPO_SRC/src/"     "$APP_DIR/src/"
 rsync -a "$REPO_SRC/models/"  "$APP_DIR/models/" 2>/dev/null || true
-rsync -a "$REPO_SRC/deploy/"  "$APP_DIR/deploy/"
+rsync -a "$REPO_SRC/deploy/bare-metal/"  "$APP_DIR/deploy/bare-metal/"
 cp    "$REPO_SRC/retrain_all.sh" "$APP_DIR/"
 cp    "$REPO_SRC/requirements.txt" "$APP_DIR/" 2>/dev/null || true
 
@@ -94,15 +94,15 @@ log "Installing systemd units…"
 
 # Fix ExecStart path in service files to match APP_DIR
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
-    "$APP_DIR/deploy/predictor.service" > /etc/systemd/system/predictor.service
+    "$APP_DIR/deploy/bare-metal/predictor.service" > /etc/systemd/system/predictor.service
 
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g" \
-    "$APP_DIR/deploy/macro_refresh.service" > /etc/systemd/system/macro_refresh.service
+    "$APP_DIR/deploy/bare-metal/macro_refresh.service" > /etc/systemd/system/macro_refresh.service
 
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
-    "$APP_DIR/deploy/signal_agent.service" > /etc/systemd/system/signal_agent.service
+    "$APP_DIR/deploy/bare-metal/signal_agent.service" > /etc/systemd/system/signal_agent.service
 
-cp "$APP_DIR/deploy/macro_refresh.timer" /etc/systemd/system/macro_refresh.timer
+cp "$APP_DIR/deploy/bare-metal/macro_refresh.timer" /etc/systemd/system/macro_refresh.timer
 
 systemctl daemon-reload
 systemctl enable predictor macro_refresh.timer signal_agent
@@ -110,7 +110,7 @@ log "Services enabled."
 
 # ── Nginx ─────────────────────────────────────────────────────────────────────
 log "Configuring nginx…"
-cp "$APP_DIR/deploy/nginx.conf" /etc/nginx/sites-available/predictor
+cp "$APP_DIR/deploy/bare-metal/nginx.conf" /etc/nginx/sites-available/predictor
 ln -sf /etc/nginx/sites-available/predictor /etc/nginx/sites-enabled/predictor
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx

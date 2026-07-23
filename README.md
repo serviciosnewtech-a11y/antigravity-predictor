@@ -1,13 +1,16 @@
 # Antigravity Predictor
 
-Self-contained Docker deployment for the Antigravity Predictor demo stack.
+Antigravity Predictor ships as two separate, self-contained installers built from the same core app (`src/`, `dashboard/`, `models/`, `data/`). Pick one — they don't mix:
 
-## Quick deploy
+- **Docker** — everything under `deploy/docker/` (compose file, Dockerfiles, launcher). Requires a working Docker daemon.
+- **Bare metal** — everything under `deploy/bare-metal/` (VPS installer, systemd units, nginx config) plus the repo-root `run_monolith.sh`/`run_local.sh` launchers. No Docker involved at all.
+
+## Quick deploy — Docker
 
 ```bash
 git clone https://github.com/serviciosnewtech-a11y/antigravity-predictor.git
 cd antigravity-predictor
-bash deploy.sh
+bash deploy/docker/deploy.sh
 ```
 
 If deploying from a release tarball instead of GitHub:
@@ -17,10 +20,18 @@ mkdir -p ~/antigravity-predictor-test
 cd ~/antigravity-predictor-test
 tar -xzf /path/to/antigravity-predictor-release.tar.gz
 sha256sum -c SHA256SUMS.txt
-bash deploy.sh
+bash deploy/docker/deploy.sh
 ```
 
-`deploy.sh` creates `.env` from `.env.example` if missing, keeps `DRY_RUN=true`, verifies Docker access, starts the stack, and smoke-checks the dashboard and APIs.
+`deploy/docker/deploy.sh` creates `.env` from `.env.example` if missing, keeps `DRY_RUN=true`, verifies Docker access, starts the stack, and smoke-checks the dashboard and APIs.
+
+## Quick deploy — bare metal (no Docker)
+
+```bash
+bash run_monolith.sh
+```
+
+boots the predictor, executor, forge, and signal-agent processes directly on the host. For a permanent systemd + nginx VPS install, run `sudo bash deploy/bare-metal/install.sh` instead.
 
 ## Language support
 
@@ -48,10 +59,10 @@ Paste that prompt into Hermes on the target PC, replacing the tarball path and S
 ## Diagnose
 
 ```bash
-bash diagnose.sh
+bash deploy/docker/diagnose.sh
 ```
 
-Return the full output if deployment is blocked.
+Return the full output if deployment is blocked. (Docker path only — bare metal has no equivalent script; check `journalctl -u predictor -f` and `curl localhost:18910/api/status` instead.)
 
 ## Default inference
 

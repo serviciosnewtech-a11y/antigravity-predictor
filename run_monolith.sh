@@ -17,8 +17,9 @@
 #     (forge/db.py's FORGE_DATA_DIR default is likewise repo-root-relative).
 #   - executor/server.py has no special CWD requirement.
 #   - signal_agent must run as `python -m signal_agent.main` from src/, so
-#     the signal_agent package resolves correctly (there's an unrelated
-#     signal_agent/Dockerfile at repo root that would otherwise shadow it).
+#     the signal_agent package resolves correctly (the Docker-only
+#     signal_agent.Dockerfile now lives under deploy/docker/, so there's
+#     no longer a same-named file at repo root to shadow it).
 #
 # Usage:
 #   bash run_monolith.sh [--no-executor] [--no-forge] [--no-agent] [--ollama]

@@ -13,7 +13,7 @@ Designed to run as a persistent systemd service alongside predictor.service.
 
 Usage:
     python3 -m signal_agent.main
-    # or via systemd: see deploy/signal_agent.service
+    # or via systemd: see deploy/bare-metal/signal_agent.service
 
 Environment variables (all optional):
     SA_INFERENCE_BACKEND — default: disabled (matches config.py /
