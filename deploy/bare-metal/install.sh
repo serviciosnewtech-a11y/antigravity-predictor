@@ -111,6 +111,18 @@ ANTHROPIC_CHAT_MODEL=
 # `sudo -u predictor /opt/predictor/.venv/bin/python
 # /opt/predictor/tools/agent_chat_relay.py` and curl its /health before
 # trusting agent_relay.service to be doing anything useful.
+#
+# Two real gotchas found during a live deploy, see
+# deploy/bare-metal/LIVE_DEPLOY_NOTES.md for the full story:
+#  1. Use an ABSOLUTE PATH to the agent binary, not a bare command name --
+#     systemd services don't inherit an interactive shell's PATH, so
+#     `command -v <binary>` works fine by hand but resolves to nothing here.
+#  2. Do NOT wrap {prompt} in your own quotes (e.g. '/bin/echo "reply:
+#     {prompt}"' is WRONG) -- the relay's own substitution already quotes
+#     it safely; nesting breaks the moment a real prompt contains an
+#     embedded quote character, which it will (health-check probes are
+#     quote-free and pass fine, hiding this until a real chat request).
+#     Correct: AGENT_RELAY_CMD=/path/to/binary --profile metis chat -q {prompt}
 HERMES_PROXY_URL=http://127.0.0.1:8645
 HERMES_INFERENCE_MODEL=
 AGENT_RELAY_CMD=

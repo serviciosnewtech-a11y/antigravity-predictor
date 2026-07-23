@@ -47,6 +47,31 @@ Configuration (env vars, all optional):
                                  AGENT_RELAY_CMD='hermes --profile ops chat -q {prompt}'
                                  AGENT_RELAY_CMD='mycli --agent trader ask {prompt}'
                                  AGENT_RELAY_CMD='python3 tools/my_agent.py {prompt}'
+
+                               DO NOT wrap {prompt} in your own quotes (e.g.
+                               '/bin/echo "reply: {prompt}"' is WRONG). The
+                               substitution already wraps the value in a safe
+                               shlex.quote() single-quoted string — that's
+                               only safe when {prompt} is the outermost
+                               quoting context. Nest it inside your own
+                               quotes and the safety guarantee breaks the
+                               moment the real prompt contains an embedded
+                               quote character (a real conversation/system
+                               prompt will, eventually — this bit a live
+                               deploy on 2026-07-23: the health check's
+                               trivial "ping" probe has no quotes in it and
+                               passed clean, but the first real chat request
+                               carried a system prompt with a literal `"`
+                               inside it, prematurely closed the wrapping
+                               quotes, and turned into a shell syntax error
+                               that /health's shallow test never caught).
+                               Correct: AGENT_RELAY_CMD=/bin/echo reply: {prompt}
+                               Wrong:   AGENT_RELAY_CMD=/bin/echo "reply: {prompt}"
+                               A startup check below warns about this but
+                               can't catch every case (e.g. quotes appearing
+                               anywhere earlier in the template) — when in
+                               doubt, don't add quotes around the
+                               placeholder at all.
     AGENT_RELAY_PORT           Port to bind. Default: 8645 (matches the
                                HERMES_PROXY_URL placeholder already used in
                                .env.example, so this "just works" with the
@@ -103,6 +128,30 @@ if "{prompt}" not in AGENT_CMD:
         f"Falling back to the default command."
     )
     AGENT_CMD = _DEFAULT_CMD
+else:
+    # Catches the exact bug that bit a live deploy on 2026-07-23: {prompt}
+    # nested inside a hand-written quote in the template defeats
+    # shlex.quote()'s safety guarantee the moment the real prompt contains
+    # an embedded quote character. A quote character immediately touching
+    # either side of the placeholder is the tell — can't catch every
+    # variant (e.g. a quote elsewhere in the template that still encloses
+    # it), but this is the common case and worth a loud warning rather than
+    # a silent failure that only shows up on real, quote-containing
+    # prompts, not the trivial "ping" the health check uses.
+    _idx = AGENT_CMD.index("{prompt}")
+    _before = AGENT_CMD[_idx - 1] if _idx > 0 else ""
+    _after_idx = _idx + len("{prompt}")
+    _after = AGENT_CMD[_after_idx] if _after_idx < len(AGENT_CMD) else ""
+    if _before in ("'", '"') or _after in ("'", '"'):
+        print(
+            f"[agent_relay] WARNING: AGENT_RELAY_CMD={AGENT_CMD!r} wraps {{prompt}} "
+            f"in its own quote characters. The substitution already applies a safe "
+            f"shlex.quote() around the value — nesting it inside another quote "
+            f"breaks that safety guarantee as soon as a real prompt contains an "
+            f"embedded quote character (it will; system prompts routinely do). "
+            f"This will pass a trivial health-check probe and then fail on real "
+            f"requests. Remove the quotes around {{prompt}} in the template."
+        )
 
 
 def _agent_binary_name() -> str:
