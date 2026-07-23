@@ -2580,78 +2580,17 @@ window.syncObjectTree = function() {
     if (chatMessagesContainer) {
       chatMessagesContainer.innerHTML = `
         <div class="chat-msg system">
-          <div class="msg-header"><span class="msg-sender system">Hermes Tutor</span><span>Just now</span></div>
+          <div class="msg-header"><span class="msg-sender system">Hermes</span><span>Just now</span></div>
           <div>Ask me to explain a signal, a feature-parity gate, or (when you want it) advise on threshold/performance tweaks — I can't execute anything, only talk. Replies only when a real Hermes/Ollama proxy is configured (see /api/chat/status); otherwise this panel shows an explicit unavailable message.</div>
         </div>
       `;
     }
-    initTutorChat();
-  }
-
-  // ── Hermes Tutor chat panel (widget-chats) ──────────────────────────────
-  // Separate persona/endpoint from the floating hermesChat() widget below:
-  // this one hits /api/tutor-chat, not /api/chat. No execution tools are
-  // wired to either endpoint server-side — this is a UI-level convenience
-  // separation, not the safety boundary (the safety boundary is that the
-  // backend never exposes tool-calling to the LLM at all).
-  let tutorHistory = [];
-  const TUTOR_HISTORY_MAX = 20;
-  let tutorPending = false;
-
-  function tutorAppendMsg(role, text) {
-    if (!chatMessagesContainer) return;
-    const sender = role === "user" ? "You" : "Hermes Tutor";
-    const div = document.createElement("div");
-    div.className = "chat-msg" + (role === "user" ? " user" : " system");
-    div.innerHTML = `
-      <div class="msg-header"><span class="msg-sender ${role === "user" ? "user" : "system"}">${sender}</span><span>${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
-      <div></div>
-    `;
-    div.querySelector("div:last-child").textContent = text;
-    chatMessagesContainer.appendChild(div);
-    chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
-  }
-
-  async function tutorSend(message) {
-    if (tutorPending || !message || !message.trim()) return;
-    tutorPending = true;
-    tutorAppendMsg("user", message);
-    tutorHistory.push({ role: "user", content: message });
-
-    try {
-      const { data } = await fetchJsonWithFallback(`/api/tutor-chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message,
-          symbol: state.activeSymbol,
-          language: (localStorage.getItem("hermes_chat_lang") || "en"),
-          history: tutorHistory.slice(-TUTOR_HISTORY_MAX - 1, -1),
-        }),
-      });
-      const reply = data.reply || "(no response)";
-      tutorAppendMsg("assistant", reply);
-      tutorHistory.push({ role: "assistant", content: reply });
-      if (tutorHistory.length > TUTOR_HISTORY_MAX) tutorHistory = tutorHistory.slice(-TUTOR_HISTORY_MAX);
-    } catch (err) {
-      tutorAppendMsg("assistant", `⚠ Tutor unavailable: ${err.message}`);
-    } finally {
-      tutorPending = false;
-    }
-  }
-
-  function initTutorChat() {
-    if (!chatSendBtn || !chatInputField || chatSendBtn.dataset.wired) return;
-    chatSendBtn.dataset.wired = "1";
-    const submit = () => {
-      const msg = chatInputField.value;
-      chatInputField.value = "";
-      tutorSend(msg);
-    };
-    chatSendBtn.addEventListener("click", submit);
-    chatInputField.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") submit();
-    });
+    // Wiring for this panel's send button lives in initAdvisoryChat() below —
+    // both this panel and the floating hermesChat() widget hit the same
+    // unified /api/chat now (previously this panel had its own
+    // initTutorChat()/tutorSend() hitting a separate /api/tutor-chat; merged
+    // back into one persona/endpoint 2026-07-23 — see the comment above
+    // /api/chat in predictor_server.py for why).
   }
 
   const alertsLogContainer = document.getElementById("alerts-log-container");
@@ -3109,7 +3048,13 @@ const hermesChat = (() => {
   return { init };
 })();
 
-// ── Upgrade existing Advisory Chat widget to call /api/chat ────────
+// ── Wire the "widget-chats" panel's send button to /api/chat ───────
+// The lone handler for this panel's button/input now — it used to race
+// against a separate initTutorChat() also wiring the same button to
+// /api/tutor-chat, with whichever ran last (this one) silently winning via
+// the clone-to-strip-listeners trick below. That's gone now that both
+// panels hit the same unified /api/chat, but the clone is harmless to keep
+// as cheap insurance against any other future double-wiring.
 function initAdvisoryChat() {
   const chatSend = document.getElementById("btn-send-chat");
   const chatInput = document.getElementById("chat-input-field");

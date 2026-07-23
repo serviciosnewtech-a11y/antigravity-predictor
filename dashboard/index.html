@@ -643,17 +643,20 @@
             </div>
           </div>
 
-          <!-- 8. Hermes Tutor Widget Panel — separate no-execution teaching/advisory
-               persona from the floating "Hermes" chat (which targets /api/chat).
-               This panel targets /api/tutor-chat. -->
+          <!-- 8. Hermes Widget Panel — no-execution advisory + teaching chat,
+               targets /api/chat (same unified persona/endpoint as the floating
+               "Hermes" chat widget). Was a separate "Hermes Tutor" persona
+               hitting its own /api/tutor-chat until the two were merged back
+               into one 2026-07-23 — see predictor_server.py's comment above
+               /api/chat for why. -->
           <div class="widget-panel" id="widget-chats" hidden>
             <div class="panel" style="height:100%; border-bottom: none; display:flex; flex-direction:column;">
-              <div class="panel-header"><h2>Hermes Tutor <span style="font-weight:400; font-size:0.7rem; color:var(--color-text-muted);">· teaching &amp; advice, no execution</span></h2></div>
+              <div class="panel-header"><h2>Hermes <span style="font-weight:400; font-size:0.7rem; color:var(--color-text-muted);">· advisory &amp; teaching, no execution</span></h2></div>
               <div class="panel-body scrollable" id="chat-messages-container" style="flex:1; padding:10px; display:flex; flex-direction:column; gap:8px; height: calc(100vh - 200px); overflow-y: auto;">
-                <!-- tutor messages only -->
+                <!-- chat messages -->
               </div>
               <div class="chat-input-bar" style="padding:8px; border-top:1px solid var(--border-color); display:flex; gap:6px; background:var(--bg-toolbar);">
-                <input type="text" id="chat-input-field" placeholder="Ask the tutor to explain a signal or advise on performance..." style="flex:1; background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:6px 10px; color:var(--color-text-main); font-size:0.75rem; outline:none;">
+                <input type="text" id="chat-input-field" placeholder="Ask Hermes to explain a signal or advise on performance..." style="flex:1; background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:6px 10px; color:var(--color-text-main); font-size:0.75rem; outline:none;">
                 <button id="btn-send-chat" class="asset-btn active" style="padding:6px 12px; font-size:0.75rem;">Send</button>
               </div>
             </div>

@@ -1307,30 +1307,29 @@ def get_all_enriched_signals():
     return _enriched_signals
 
 
-# ── Hermes Chat endpoints ────────────────────────────────────────────────────
+# ── Hermes Chat endpoint ─────────────────────────────────────────────────────
 #
-# Two distinct chat surfaces, both proxying to a generic OpenAI-compatible
-# "Hermes proxy" endpoint or Ollama — no execution tools are ever exposed to
-# either; both are pure text in/out.
+# One chat surface, proxying to a generic OpenAI-compatible "Hermes proxy"
+# endpoint or Ollama — no execution tools are ever exposed; pure text in/out.
 #
-#   /api/chat        — operational signal-agent chat ("Hermes"). Terse,
-#                       advisory-only commentary on the current signal.
-#   /api/tutor-chat   — separate tutor persona ("Hermes Tutor"). Explains the
-#                       system, teaches concepts, and — when asked — advises
-#                       on performance/threshold improvements grounded in the
-#                       actual model metrics on disk. Still has zero execution
-#                       access: no tool-calling is wired up for either
-#                       endpoint, so this is a structural guarantee, not a
-#                       prompt-only promise.
+#   /api/chat — "Hermes", the Crypto Operator Agent. Terse, advisory-only
+#               commentary on the current signal AND — when asked — explains
+#               general concepts and advises on performance/threshold
+#               improvements grounded in the actual model metrics on disk.
+#               Zero execution access: no tool-calling is wired up at all, so
+#               this is a structural guarantee, not a prompt-only promise.
 #
-# Backend resolution is env-driven and "standardized" the same way for both:
-# each surface first tries its own TUTOR_-prefixed override, then falls back
-# to the shared HERMES_PROXY_URL / OLLAMA_URL used by the operational chat.
-# This lets an operator point the tutor at the same model (default, zero
-# extra config) or a different one (e.g. a smaller/cheaper/safer model)
-# without touching code. GET /api/chat/status reports what's actually wired
-# for each surface so this doesn't have to be reverse-engineered from env
-# vars — that's the "standard way to know the endpoints" this exposes.
+# Previously split into two personas/endpoints (this one plus a separate
+# /api/tutor-chat "Hermes Tutor"). Merged back into one 2026-07-23: the
+# operator is the client-facing persona actually in use, the split added a
+# second system prompt/memory file/set of env overrides to keep in sync for
+# a distinction real users couldn't reliably tell apart from two chat boxes
+# on the same dashboard — and the dashboard's own JS had silently let
+# initAdvisoryChat()'s node-cloning clobber initTutorChat()'s button
+# listener on load anyway, so /api/tutor-chat was already effectively dead
+# from the UI's perspective before this merge. GET /api/chat/status reports
+# what's actually wired so this doesn't have to be reverse-engineered from
+# env vars.
 
 class _ChatMsg(BaseModel):
     role: str   # "user" | "assistant"
@@ -1389,35 +1388,20 @@ def _format_price_levels_for_prompt(levels: Optional[dict]) -> str:
     )
 
 
-def _backend_config(prefix: str) -> dict:
+def _backend_config() -> dict:
     """
     Resolve (proxy_url, proxy_key, proxy_model, ollama_url, ollama_model) for
-    a given chat surface. `prefix` is "" for the operational chat (reads the
-    base HERMES_PROXY_URL/OLLAMA_URL vars) or "TUTOR_" for the tutor chat
-    (reads TUTOR_HERMES_PROXY_URL/TUTOR_OLLAMA_URL first, falling back to the
-    base vars if unset — so the tutor "just works" off the same backend by
-    default, and only needs its own vars set if you want it separate).
+    the one chat surface, from the base HERMES_PROXY_URL/OLLAMA_URL vars.
+    (Previously took a `prefix` param so a separate "tutor" chat could
+    override to a different backend/model — removed when the two chat
+    personas were merged back into one; see the module-level comment above
+    /api/chat.)
     """
-    proxy_url = (
-        os.environ.get(f"{prefix}HERMES_PROXY_URL")
-        or os.environ.get("HERMES_PROXY_URL", "")
-    ).rstrip("/")
-    proxy_key = (
-        os.environ.get(f"{prefix}HERMES_PROXY_API_KEY")
-        or os.environ.get("HERMES_PROXY_API_KEY", "local")
-    )
-    proxy_model = (
-        os.environ.get(f"{prefix}HERMES_INFERENCE_MODEL")
-        or os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k")
-    )
-    ollama_url = (
-        os.environ.get(f"{prefix}OLLAMA_URL")
-        or os.environ.get("OLLAMA_URL", "")
-    ).rstrip("/")
-    ollama_model = (
-        os.environ.get(f"{prefix}OLLAMA_MODEL")
-        or os.environ.get("OLLAMA_MODEL", "llama3.2")
-    )
+    proxy_url = os.environ.get("HERMES_PROXY_URL", "").rstrip("/")
+    proxy_key = os.environ.get("HERMES_PROXY_API_KEY", "local")
+    proxy_model = os.environ.get("HERMES_INFERENCE_MODEL", "gemma4:12b-it-qat-policy-128k")
+    ollama_url = os.environ.get("OLLAMA_URL", "").rstrip("/")
+    ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2")
     return {
         "proxy_url": proxy_url, "proxy_key": proxy_key, "proxy_model": proxy_model,
         "ollama_url": ollama_url, "ollama_model": ollama_model,
@@ -1521,11 +1505,13 @@ async def hermes_chat(req: _ChatRequest):
         + "signal or suggest a trade, state these exact dollar amounts — never speak only in "
         + f"qualitative terms when real numbers are available.]\n{_format_price_levels_for_prompt(price_levels)}"
         + f"\n\n[Full system context — read-only]\n{_live_system_context()}"
+        + f"\n\n[Model performance context — cite these real numbers, don't invent them, when asked "
+        + f"about thresholds/retraining/performance]\n{_model_performance_context()}"
         + (f"\n\n[Recalled memory from earlier conversations with this client]\n{memory_recall}" if memory_recall else "")
         + f"\n\n[Language]\n{language_rule}"
     )
 
-    result = _call_llm_backend(system_ctx, req.message, req.history, _backend_config(""))
+    result = _call_llm_backend(system_ctx, req.message, req.history, _backend_config())
     if result:
         _operator_memory_append(req.message, result["reply"])
         return {
@@ -1546,53 +1532,10 @@ async def hermes_chat(req: _ChatRequest):
     )
 
 
-_TUTOR_SYSTEM_PROMPT = """You are Hermes Tutor, the teaching/advisory persona for the Antigravity
-Predictor dashboard. Your job is to help the person using this dashboard
-understand what the system is showing them and why — not to operate the
-system, and not to trade on their behalf.
-
-You have no ability to execute trades, change configuration, restart
-services, or take any action outside this conversation. This is not a
-policy you are choosing to follow — you have literally been given no tools
-to do any of it; only this text conversation exists. If someone asks you to
-place a trade, flip a setting, override a signal, or do anything beyond
-talking, say plainly that you can't (not "I won't" — you're not able to),
-and offer to explain the relevant part of the system instead. Never simulate
-having taken an action or imply an action occurred.
-
-What you should do:
-- Explain the current signal (LONG/SHORT/NEUTRAL/UNAVAILABLE) for whichever
-  asset is in context, what it means, and what confidence level it shows.
-- Explain the model's reasoning surface: which feature families are
-  populated vs. degraded, what that does to prediction quality, and why the
-  system would rather show UNAVAILABLE than guess.
-- When asked for performance-improvement advice, use the real model metrics
-  and thresholds given to you in [Model performance context] below — cite
-  actual numbers, don't invent them. You can suggest specific, concrete
-  changes (e.g. "raise the BTC short threshold back toward the F1-optimal
-  value if you want fewer, higher-conviction signals") but you cannot apply
-  them — say so, and point to which script/config field would need editing.
-- Teach general concepts on request — technical indicators, funding rates,
-  order flow, volatility regimes, position sizing, risk management — at
-  whatever depth the person wants.
-- Be honest about uncertainty. If confidence is low, or a feature family is
-  degraded, or a metric looks weak (e.g. low precision), say so plainly.
-
-What you should never do:
-- Never give direct financial advice framed as an instruction ("buy now",
-  "close this position"). Explain tradeoffs and let the person decide.
-- Never claim to have executed, scheduled, or changed anything.
-- Never claim access to systems, accounts, or data beyond what's included
-  in the context passed to you for this conversation.
-
-Tone: clear, patient, a little informal. Keep answers as short as the
-question allows; expand only when asked for depth."""
-
-
 def _model_performance_context() -> str:
     """
     Reads whatever model report/config files exist on disk and summarizes
-    them for the tutor prompt. Missing files are skipped silently (not every
+    them for the chat prompt. Missing files are skipped silently (not every
     deployment will have run every tool) rather than raising — this is
     advisory context, not a hard dependency.
     """
@@ -1627,9 +1570,9 @@ def _model_performance_context() -> str:
 
 def _live_system_context() -> str:
     """
-    Broader read-only situational awareness for the Tutor: per-asset feature
+    Broader read-only situational awareness for the chat: per-asset feature
     parity, executor dry-run status, and Forge's current leaderboard leader
-    (if reachable). This is still purely informational — the Tutor has no
+    (if reachable). This is still purely informational — the chat has no
     tool wired to act on any of it. Every lookup is best-effort: a service
     being unreachable just means that section is omitted, never an error
     surfaced to the user.
@@ -1665,17 +1608,17 @@ def _live_system_context() -> str:
 
 
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
-_TUTOR_MEMORY_PATH = os.path.join(_LOGS_DIR, "tutor_memory.jsonl")
 _OPERATOR_MEMORY_PATH = os.path.join(_LOGS_DIR, "crypto_operator_memory.jsonl")
-_MEMORY_RECALL = 12  # how many past exchanges to fold back into context, per persona
+_MEMORY_RECALL = 12  # how many past exchanges to fold back into context
 
 
 def _persona_memory_recall(path: str) -> str:
-    """Best-effort read of recent past exchanges for one persona, persisted
-    server-side across sessions/reloads (the client's own history[] only
-    lives in the browser tab). Each persona has its own file — the Tutor's
-    memory and the Crypto Operator's memory are isolated from each other,
-    same as their workspaces. Missing/unreadable file just means no memory
+    """Best-effort read of recent past exchanges, persisted server-side
+    across sessions/reloads (the client's own history[] only lives in the
+    browser tab). Takes a path rather than being hardcoded to one file since
+    this used to serve two separate personas (operator + tutor, merged back
+    into one 2026-07-23) — kept generic in case a future persona needs its
+    own memory file again. Missing/unreadable file just means no memory
     yet."""
     try:
         p = Path(path)
@@ -1723,15 +1666,6 @@ def _persona_memory_append(path: str, user_msg: str, agent_reply: str) -> None:
         logger.warning(f"[chat] memory append failed for {path} (non-fatal): {e}")
 
 
-# Backwards-compatible thin wrappers used by the Tutor endpoint below.
-def _tutor_memory_recall() -> str:
-    return _persona_memory_recall(_TUTOR_MEMORY_PATH)
-
-
-def _tutor_memory_append(user_msg: str, tutor_reply: str) -> None:
-    _persona_memory_append(_TUTOR_MEMORY_PATH, user_msg, tutor_reply)
-
-
 _CRYPTO_OPERATOR_SYSTEM_PROMPT = """You are the Crypto Operator Agent — the Antigravity Predictor dashboard's
 chat box, wired directly to the system's live back engine. You are a
 dedicated counterpart for this client, who communicates primarily in
@@ -1774,7 +1708,22 @@ hodlear, shitcoin, pump y dump, farmear, en verde/en rojo, lunear, manos
 de diamante/de papel, quemar tokens, FOMO, FUD, DYOR, rekt, airdrop, gas,
 CEX/DEX, TVL, degen, apalancamiento, liquidación, etc.) — but a term you
 aren't confident about is exactly the kind of ambiguity you should ask
-about, not silently reinterpret."""
+about, not silently reinterpret.
+
+Beyond commentary on the live signal, you also teach: explain general
+concepts on request (technical indicators, funding rates, order flow,
+volatility regimes, position sizing, risk management) at whatever depth the
+client wants, and explain the model's reasoning surface — which feature
+families are populated vs. degraded, what that does to prediction quality,
+and why the system would rather show UNAVAILABLE than guess. When asked for
+performance-improvement advice, use the real model metrics and thresholds
+given to you in [Model performance context] below — cite actual numbers,
+never invent them. You can suggest specific, concrete changes (e.g. "raise
+the BTC short threshold back toward the F1-optimal value if you want fewer,
+higher-conviction signals") but you cannot apply them — say so, and point to
+which script/config field would need editing. Be honest about uncertainty:
+if confidence is low, a feature family is degraded, or a metric looks weak
+(low precision), say so plainly rather than hedging vaguely."""
 
 
 def _operator_memory_recall() -> str:
@@ -1783,65 +1732,6 @@ def _operator_memory_recall() -> str:
 
 def _operator_memory_append(user_msg: str, reply: str) -> None:
     _persona_memory_append(_OPERATOR_MEMORY_PATH, user_msg, reply)
-
-
-@app.post("/api/tutor-chat")
-async def hermes_tutor_chat(req: _ChatRequest):
-    """
-    Hermes Tutor — separate persona from the operational /api/chat. Explains
-    the system and, when asked, advises on performance improvements using
-    real metrics — but cannot execute anything (no tools wired to either
-    endpoint). Same honest-503-if-unconfigured behavior as /api/chat.
-    """
-    sym = req.symbol if req.symbol in engines else "BTC/USDT"
-    eng = engines[sym]
-
-    with eng.lock:
-        signal     = eng.latest_signal
-        long_prob  = eng.latest_prediction_long
-        short_prob = eng.latest_prediction_short
-        close      = eng.latest_close
-        atr        = eng.latest_atr
-
-    price_levels = _compute_price_levels(signal, close, atr)
-    lang = "es" if str(req.language).lower().startswith("es") else "en"
-    language_rule = (
-        "Respond in Spanish. " if lang == "es" else "Respond in English. "
-    )
-
-    memory_recall = _tutor_memory_recall()
-    system_ctx = (
-        _TUTOR_SYSTEM_PROMPT
-        + f"\n\n[Live signal context]\nAsset in view: {sym}. Current signal: {signal}. "
-        + f"long_prob={long_prob:.4f}, short_prob={short_prob:.4f}."
-        + f"\n\n[Trade levels for the current signal — the ACTUAL computed numbers, same as the "
-        + "dashboard's Agent Report panel. Cite these exact figures when explaining the signal "
-        + f"or answering a performance/what-if question.]\n{_format_price_levels_for_prompt(price_levels)}"
-        + f"\n\n[Full system context — read-only, you cannot change any of this]\n{_live_system_context()}"
-        + f"\n\n[Model performance context]\n{_model_performance_context()}"
-        + (f"\n\n[Recalled memory from earlier conversations with this operator]\n{memory_recall}" if memory_recall else "")
-        + f"\n\n[Language]\n{language_rule}"
-    )
-
-    result = _call_llm_backend(system_ctx, req.message, req.history, _backend_config("TUTOR_"))
-    if result:
-        _tutor_memory_append(req.message, result["reply"])
-        return {
-            "reply": result["reply"],
-            "source": result["source"],
-            "signal": signal,
-            "price_levels": price_levels,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-
-    return JSONResponse(
-        status_code=503,
-        content={
-            "error": "agent_unavailable",
-            "message": "Tutor agent backend unavailable or disabled",
-            "source": "unavailable",
-        },
-    )
 
 
 @app.get("/api/chat/status")
@@ -1885,8 +1775,8 @@ def chat_status():
         except Exception as e:
             return {"verified": False, "verify_note": f"relay unreachable: {e}"}
 
-    def _describe(prefix: str) -> dict:
-        cfg = _backend_config(prefix)
+    def _describe() -> dict:
+        cfg = _backend_config()
         if cfg["proxy_url"]:
             base = {"configured": True, "backend": "hermes_proxy", "endpoint": cfg["proxy_url"], "model": cfg["proxy_model"]}
             base.update(_probe_local_relay(cfg["proxy_url"]))
@@ -1897,9 +1787,10 @@ def chat_status():
             return base
         return {"configured": False, "backend": None, "endpoint": None, "model": None, "verified": False, "verify_note": "not configured"}
 
+    # Was {"advisory_chat": ..., "tutor_chat": ...} before the two chat
+    # personas were merged back into one 2026-07-23 — now just one surface.
     return {
-        "advisory_chat": {"route": "/api/chat", **_describe("")},
-        "tutor_chat": {"route": "/api/tutor-chat", **_describe("TUTOR_")},
+        "chat": {"route": "/api/chat", **_describe()},
     }
 
 

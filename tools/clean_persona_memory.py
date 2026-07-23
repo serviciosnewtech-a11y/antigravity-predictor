@@ -7,12 +7,17 @@ Background: before this fix, tools/agent_chat_relay.py returned HTTP 200
 with error text embedded in the "reply" field whenever the underlying
 agent invocation actually failed (e.g. a missing CLI profile). predictor_
 server.py had no way to tell that apart from a real reply, so it got
-written into logs/crypto_operator_memory.jsonl / logs/tutor_memory.jsonl
-as if it were a genuine conversation turn — meaning it would keep getting
-recalled into every future chat's context. The relay itself is now fixed
-to return a real error status instead, so this stops happening going
-forward — but this script is for cleaning up memory files that already
-have that pollution in them from before the fix.
+written into logs/crypto_operator_memory.jsonl as if it were a genuine
+conversation turn — meaning it would keep getting recalled into every
+future chat's context. The relay itself is now fixed to return a real
+error status instead, so this stops happening going forward — but this
+script is for cleaning up memory files that already have that pollution
+in them from before the fix.
+
+(Historical note: this used to also clean logs/tutor_memory.jsonl, from
+when the dashboard had a separate "Hermes Tutor" persona/endpoint with its
+own memory file. That was merged back into the one operator persona
+2026-07-23, so there's only one memory file to clean now.)
 
 Usage:
     python3 tools/clean_persona_memory.py                 # dry run, reports what would be removed
@@ -81,7 +86,6 @@ def main() -> int:
     logs_dir = repo_root / "logs"
     targets = [
         logs_dir / "crypto_operator_memory.jsonl",
-        logs_dir / "tutor_memory.jsonl",
     ]
 
     print(f"{'APPLYING' if args.apply else 'DRY RUN'} — scanning persona memory files:")
