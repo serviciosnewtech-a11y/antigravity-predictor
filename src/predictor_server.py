@@ -1129,12 +1129,15 @@ def get_assets():
 
 # ── Enriched signal endpoints (Hermes signal agent ↔ dashboard) ───────────────
 
-@app.post("/api/enriched-signal/{asset}")
+@app.post("/api/enriched-signal/{asset:path}")
 async def post_enriched_signal(asset: str, payload: dict, _: None = Depends(require_internal_token)):
     """
     Written by the Hermes signal agent when a high-confidence event fires.
-    `asset` is URL-encoded, e.g. 'BTC%2FUSDT' or 'BTC_USDT'.
-    The agent should normalise to 'BTC/USDT' form before POSTing.
+    `asset` accepts 'BTC_USDT', 'BTC%2FUSDT' (percent-encoded slash), or a
+    literal 'BTC/USDT' — the ':path' converter is required for the last
+    form to route at all; FastAPI's default single-segment {asset} string
+    param silently fails to match anything containing a real '/' and falls
+    through to the static-file mount instead (405, not this handler).
     """
     # Accept both BTC_USDT and BTC/USDT spellings from callers
     sym = asset.replace("_", "/")
@@ -1156,7 +1159,7 @@ async def post_enriched_signal(asset: str, payload: dict, _: None = Depends(requ
     return {"status": "ok", "asset": sym}
 
 
-@app.get("/api/enriched-signal/{asset}")
+@app.get("/api/enriched-signal/{asset:path}")
 def get_enriched_signal(asset: str):
     """
     Read by the dashboard to display the latest Hermes-enriched signal.
@@ -1563,10 +1566,18 @@ def _persona_memory_recall(path: str) -> str:
         return ""
 
 
+_MEMORY_MAX_LINES = 2000  # rotation cap — well above _MEMORY_RECALL(12), just bounds disk growth
+
+
 def _persona_memory_append(path: str, user_msg: str, agent_reply: str) -> None:
     """Append this exchange to one persona's persistent memory log.
     Best-effort — a write failure here should never break the chat
-    response itself."""
+    response itself. Rotates the file down to the most recent
+    _MEMORY_MAX_LINES entries whenever it grows past that, so an
+    append-only log with no cap doesn't grow disk usage unbounded on a
+    long-running deployment — recall only ever reads the last
+    _MEMORY_RECALL lines anyway, so this never affects what the persona
+    remembers, only how much history sits on disk beyond that."""
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -1576,6 +1587,10 @@ def _persona_memory_append(path: str, user_msg: str, agent_reply: str) -> None:
                 "user": user_msg,
                 "agent": agent_reply,
             }) + "\n")
+        if p.stat().st_size > 0:
+            lines = p.read_text().splitlines()
+            if len(lines) > _MEMORY_MAX_LINES:
+                p.write_text("\n".join(lines[-_MEMORY_MAX_LINES:]) + "\n")
     except Exception as e:
         logger.warning(f"[chat] memory append failed for {path} (non-fatal): {e}")
 
@@ -1708,13 +1723,51 @@ def chat_status():
     chat surface currently resolves to, without exposing secrets. Lets an
     operator confirm what's actually wired without reading env vars/code.
     """
+    def _probe_local_relay(endpoint: str) -> dict:
+        """
+        'configured' only means an env var is non-empty — it says nothing
+        about whether the backend actually works (this was a real gap: an
+        operator could see 'configured: true' while every real chat call
+        was failing). For the local agent relay specifically (loopback
+        address, its own /health endpoint reports whether the underlying
+        agent binary genuinely exists), do a cheap real check rather than
+        trusting config presence alone. Remote APIs (Pattern A) aren't
+        probed here — a real reachability check for those means an actual
+        paid/slow completion call, out of scope for a status endpoint.
+        """
+        if not (endpoint.startswith("http://127.0.0.1") or endpoint.startswith("http://localhost")):
+            return {"verified": None, "verify_note": "remote backend — not probed, only presence-checked"}
+        try:
+            # Generous timeout: the relay's own /health does a real cached
+            # test invocation of the underlying agent (not just a binary-
+            # existence check), which can take a few seconds on a cache
+            # miss — matching AGENT_RELAY_HEALTHCHECK_TIMEOUT_S's default.
+            r = requests.get(f"{endpoint}/health", timeout=12)
+            if r.status_code != 200:
+                return {"verified": False, "verify_note": f"relay /health returned HTTP {r.status_code}"}
+            h = r.json()
+            if h.get("agent_binary_exists") is False:
+                binary = h.get("agent_binary", "?")
+                return {"verified": False, "verify_note": f"relay is up but agent binary {binary!r} not found on PATH"}
+            if h.get("live_ok") is False:
+                return {"verified": False, "verify_note": f"relay's real test call failed: {h.get('live_detail', 'unknown error')}"}
+            if h.get("live_ok") is True:
+                return {"verified": True, "verify_note": "relay reachable, real test invocation succeeded"}
+            return {"verified": None, "verify_note": "relay reachable, live test result unavailable"}
+        except Exception as e:
+            return {"verified": False, "verify_note": f"relay unreachable: {e}"}
+
     def _describe(prefix: str) -> dict:
         cfg = _backend_config(prefix)
         if cfg["proxy_url"]:
-            return {"configured": True, "backend": "hermes_proxy", "endpoint": cfg["proxy_url"], "model": cfg["proxy_model"]}
+            base = {"configured": True, "backend": "hermes_proxy", "endpoint": cfg["proxy_url"], "model": cfg["proxy_model"]}
+            base.update(_probe_local_relay(cfg["proxy_url"]))
+            return base
         if cfg["ollama_url"]:
-            return {"configured": True, "backend": "ollama", "endpoint": cfg["ollama_url"], "model": cfg["ollama_model"]}
-        return {"configured": False, "backend": None, "endpoint": None, "model": None}
+            base = {"configured": True, "backend": "ollama", "endpoint": cfg["ollama_url"], "model": cfg["ollama_model"]}
+            base.update(_probe_local_relay(cfg["ollama_url"]))
+            return base
+        return {"configured": False, "backend": None, "endpoint": None, "model": None, "verified": False, "verify_note": "not configured"}
 
     return {
         "advisory_chat": {"route": "/api/chat", **_describe("")},

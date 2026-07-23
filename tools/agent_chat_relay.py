@@ -86,6 +86,15 @@ RELAY_PORT = int(os.environ.get("AGENT_RELAY_PORT", "8645"))
 RELAY_HOST = os.environ.get("AGENT_RELAY_HOST", "127.0.0.1")
 COMMAND_TIMEOUT_S = float(os.environ.get("AGENT_RELAY_TIMEOUT_S", "120"))
 HISTORY_TURNS = int(os.environ.get("AGENT_RELAY_HISTORY_TURNS", "8"))
+HEALTHCHECK_TIMEOUT_S = float(os.environ.get("AGENT_RELAY_HEALTHCHECK_TIMEOUT_S", "10"))
+HEALTHCHECK_CACHE_S = float(os.environ.get("AGENT_RELAY_HEALTHCHECK_CACHE_S", "20"))
+
+# Cache for the real test-invocation health check (see _live_healthcheck) —
+# module-level, deliberately simple (single dict, no locking) since the
+# ThreadingHTTPServer's GIL makes a dict read/write here atomic enough for
+# this use: worst case under a race is one extra redundant probe, never
+# corrupted state.
+_health_cache = {"ts": 0.0, "ok": None, "detail": ""}
 
 if "{prompt}" not in AGENT_CMD:
     print(
@@ -108,22 +117,69 @@ def _agent_binary_name() -> str:
         return AGENT_CMD
 
 
-def _invoke_agent(prompt: str) -> str:
-    """Run AGENT_RELAY_CMD with {prompt} substituted (shell-quoted) and
-    capture stdout as the reply. Falls back to stderr if stdout is empty,
-    so an agent-side warning/error still surfaces as a reply instead of
-    silently returning blank text."""
+# Heuristic failure markers: if the agent's own output starts with one of
+# these (case-insensitive), treat it as a failure even though the process
+# exited 0 — some CLI tools print a friendly error and still exit success.
+# This is a disclosed heuristic, not foolproof (a legitimate reply that
+# happens to start with "error" would be misclassified) — but it's strictly
+# better than the previous behavior of treating ANY output as a real reply.
+_FAILURE_PREFIXES = ("error:", "error ", "fatal:", "traceback")
+
+
+def _invoke_agent(prompt: str, timeout_s: float | None = None) -> tuple[bool, str]:
+    """Run AGENT_RELAY_CMD with {prompt} substituted (shell-quoted).
+    Returns (ok, text). ok=False on: relay-side exception/timeout, a
+    non-zero exit code from the agent process, empty output, or output that
+    matches a known failure-prefix heuristic. Callers must NOT treat a
+    not-ok result as a valid reply — surface it as a real error instead
+    (see do_POST below), so predictor_server.py's honest-503 behavior and
+    persona-memory-only-on-success behavior both work correctly instead of
+    a relay-side failure being recorded as if it were a real conversation
+    turn."""
     cmd = AGENT_CMD.replace("{prompt}", shlex.quote(prompt))
+    effective_timeout = COMMAND_TIMEOUT_S if timeout_s is None else timeout_s
     try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S)
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=effective_timeout)
     except subprocess.TimeoutExpired:
-        return f"[agent_relay] agent call timed out after {COMMAND_TIMEOUT_S}s"
+        return False, f"[agent_relay] agent call timed out after {effective_timeout}s"
     except Exception as e:
-        return f"[agent_relay] failed to invoke agent: {e}"
+        return False, f"[agent_relay] failed to invoke agent: {e}"
+
     out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+
+    if proc.returncode != 0:
+        detail = err or out or f"exited with code {proc.returncode}"
+        return False, f"[agent_relay] agent exited with code {proc.returncode}: {detail}"
+
     if not out:
-        out = (proc.stderr or "").strip() or "[agent_relay] agent returned no output"
-    return out
+        return False, (err or "[agent_relay] agent returned no output")
+
+    if out.lower().startswith(_FAILURE_PREFIXES):
+        return False, out
+
+    return True, out
+
+
+def _live_healthcheck() -> dict:
+    """
+    Real, cached test invocation — not just a 'does the binary exist' check.
+    A binary can exist on PATH and still fail every real call (wrong
+    profile, bad args, missing auth) — the previous health check couldn't
+    tell those apart, which is exactly what let predictor_server.py's
+    /api/chat/status report 'configured'/'verified' while chat was
+    actually dead. Cached for HEALTHCHECK_CACHE_S so frequent status polls
+    don't spam the underlying agent with real invocations; a real failure
+    is visible within one cache window, not indefinitely stale.
+    """
+    now = time.time()
+    if now - _health_cache["ts"] < HEALTHCHECK_CACHE_S and _health_cache["ok"] is not None:
+        return {"live_ok": _health_cache["ok"], "live_detail": _health_cache["detail"], "cached": True}
+    ok, detail = _invoke_agent("ping", timeout_s=HEALTHCHECK_TIMEOUT_S)
+    _health_cache["ts"] = now
+    _health_cache["ok"] = ok
+    _health_cache["detail"] = detail if not ok else "ok"
+    return {"live_ok": ok, "live_detail": _health_cache["detail"], "cached": False}
 
 
 def _flatten_messages(messages: list) -> str:
@@ -160,12 +216,18 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             binary = _agent_binary_name()
-            self._send_json(200, {
+            binary_exists = shutil.which(binary) is not None or os.path.exists(binary)
+            payload = {
                 "status": "online",
                 "agent_cmd": AGENT_CMD,
                 "agent_binary": binary,
-                "agent_binary_exists": shutil.which(binary) is not None or os.path.exists(binary),
-            })
+                "agent_binary_exists": binary_exists,
+            }
+            if binary_exists:
+                payload.update(_live_healthcheck())
+            else:
+                payload.update({"live_ok": False, "live_detail": "agent binary not found, skipped live test", "cached": False})
+            self._send_json(200, payload)
         else:
             self._send_json(404, {"error": "not_found"})
 
@@ -189,7 +251,17 @@ class _Handler(BaseHTTPRequestHandler):
             prompt_lines.append(f"[user] {message}")
             prompt = "\n".join(p for p in prompt_lines if p)
 
-            reply = _invoke_agent(prompt)
+            ok, reply = _invoke_agent(prompt)
+            if not ok:
+                # Real failure — NOT a 200. predictor_server.py's
+                # _call_llm_backend only treats status_code==200 as success,
+                # so this correctly propagates to an honest 503
+                # agent_unavailable at the dashboard, and critically never
+                # reaches the persona-memory-append code path (only called
+                # on a successful result) — so a broken agent no longer
+                # pollutes conversation memory with error text.
+                self._send_json(502, {"error": "agent_invocation_failed", "detail": reply})
+                return
             self._send_json(200, {
                 "reply": reply,
                 "source": "agent-relay",
@@ -201,7 +273,10 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path in ("/chat/completions", "/v1/chat/completions"):
             messages = body.get("messages", [])
             prompt = _flatten_messages(messages)
-            reply = _invoke_agent(prompt)
+            ok, reply = _invoke_agent(prompt)
+            if not ok:
+                self._send_json(502, {"error": {"message": reply, "type": "agent_invocation_failed"}})
+                return
             model = body.get("model") or "local-agent-cli"
             self._send_json(200, {
                 "id": "chatcmpl-agent-relay",

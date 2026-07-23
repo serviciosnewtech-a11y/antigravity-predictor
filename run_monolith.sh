@@ -53,9 +53,33 @@ fi
 [[ -z "$PYTHON" ]] && { echo "ERROR: Python not found."; exit 1; }
 echo "[monolith] Using Python: $($PYTHON --version)"
 
+if [[ ! -f "$SCRIPT_DIR/.env" && -f "$SCRIPT_DIR/.env.example" ]]; then
+    echo "[monolith] No .env found — copying from .env.example…"
+    cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+fi
+
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
     echo "[monolith] Loading .env…"
     set -a; source "$SCRIPT_DIR/.env"; set +a
+fi
+
+# ── Auto-generate INTERNAL_API_TOKEN if it's empty ──────────────────────────
+# INTERNAL_API_TOKEN gates the enriched-signal write endpoint (POST
+# /api/enriched-signal/{asset}), used by the signal agent when enabled. Left
+# blank in .env.example on purpose (no secret should ship pre-set), but a
+# permanently-blank token means that endpoint 503s forever until an operator
+# manually notices and sets one — deploy.sh (Docker path) already
+# auto-generates one on first run; this mirrors that for bare metal so the
+# two paths don't silently diverge in default security posture.
+if [[ -z "${INTERNAL_API_TOKEN:-}" && -f "$SCRIPT_DIR/.env" ]]; then
+    NEW_TOKEN="$($PYTHON -c 'import secrets; print(secrets.token_hex(32))')"
+    if grep -q '^INTERNAL_API_TOKEN=' "$SCRIPT_DIR/.env"; then
+        sed -i "s/^INTERNAL_API_TOKEN=.*/INTERNAL_API_TOKEN=${NEW_TOKEN}/" "$SCRIPT_DIR/.env"
+    else
+        echo "INTERNAL_API_TOKEN=${NEW_TOKEN}" >> "$SCRIPT_DIR/.env"
+    fi
+    export INTERNAL_API_TOKEN="$NEW_TOKEN"
+    echo "[monolith] INTERNAL_API_TOKEN was empty — generated a new one and saved it to .env."
 fi
 
 if [[ $USE_OLLAMA -eq 1 ]]; then
