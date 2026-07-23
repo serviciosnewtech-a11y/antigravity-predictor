@@ -140,7 +140,7 @@ if [[ "${ENABLE_AGENT_RELAY:-false}" == "true" ]]; then
     # because startup here doesn't fail loudly either way. This has
     # actually happened: a fixed relay shipped correctly in a package but
     # a stale pre-fix process on the target machine kept serving requests.
-    STALE_PID="$(ss -ltnp 2>/dev/null | grep -E ":${AGENT_RELAY_PORT}\b" | grep -oP 'pid=\K[0-9]+' | head -1)"
+    STALE_PID="$(ss -ltnp 2>/dev/null | grep -E ":${AGENT_RELAY_PORT}\b" | grep -oP 'pid=\K[0-9]+' | head -1 || true)"
     if [[ -n "$STALE_PID" ]]; then
         echo "[monolith] Port ${AGENT_RELAY_PORT} already has a process on it (pid $STALE_PID) — killing it before starting the new relay."
         kill "$STALE_PID" 2>/dev/null || true
