@@ -658,6 +658,8 @@ class AssetEngine:
                         "missing_features": self.missing_features,
                         "feature_gate": self.feature_gate_result,
                         "stats": self._stats(),
+                        "latest_close": self.latest_close,
+                        "latest_atr": self.latest_atr,
                     }),
                     loop,
                 )
@@ -702,6 +704,8 @@ class AssetEngine:
                     "missing_features": self.missing_features,
                     "feature_gate": self.feature_gate_result,
                     "stats": self._stats(),
+                    "latest_close": self.latest_close,
+                    "latest_atr": self.latest_atr,
                 }),
                 loop,
             )
@@ -800,6 +804,8 @@ class AssetEngine:
                 "candles": list(self.candles),
                 "trades": list(self.trades_history),
                 "stats": self._stats(),
+                "latest_close": self.latest_close,
+                "latest_atr": self.latest_atr,
             }
 
 
@@ -1044,6 +1050,8 @@ def get_status(symbol: Optional[str] = Query(default=None)):
             "feature_gate": snap["feature_gate"],
             "inference_blocked_count": snap["inference_blocked_count"],
             "stats": snap["stats"],
+            "latest_close": snap["latest_close"],
+            "latest_atr": snap["latest_atr"],
         }
     # Return summary for all assets
     return {
@@ -1732,6 +1740,8 @@ async def ws_endpoint(websocket: WebSocket):
                     "signal":              snap["latest_signal"],
                     "position":            snap["position"],
                     "stats":               snap["stats"],
+                    "latest_close":        snap["latest_close"],
+                    "latest_atr":          snap["latest_atr"],
                 } for sym, snap in snaps.items()
             }
         })

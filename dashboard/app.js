@@ -1656,9 +1656,13 @@ function applySnapshot(sym, snap) {
 
     const last = snap.candles[snap.candles.length - 1];
 
-    // Seed live price + ATR from snapshot
+    // Seed live price + ATR from snapshot. atr_proxy is never present on
+    // the candle object itself (it's a transient prediction-pipeline
+    // value, not part of raw OHLCV) — the backend publishes it as a
+    // separate top-level latest_close/latest_atr pair on the snapshot.
     state.latestClose = last.close;
-    if (last.atr_proxy && last.atr_proxy > 0) state.latestATR = last.atr_proxy;
+    if (snap.latest_atr && snap.latest_atr > 0) state.latestATR = snap.latest_atr;
+    if (snap.latest_close) state.latestClose = snap.latest_close;
 
     const predL = snap.prediction_long  ?? 0.0;
     const predS = snap.prediction_short ?? 0.0;
@@ -1740,6 +1744,8 @@ function handleTick(data) {
   snap.signal   = data.signal;
   snap.position = data.position;
   snap.stats    = data.stats;
+  snap.latest_close = data.latest_close;
+  snap.latest_atr   = data.latest_atr;
   if (!snap.candles) snap.candles = [];
   
   // Update internal snapshot candles buffer
@@ -1762,9 +1768,12 @@ function handleTick(data) {
   // Only update chart/detailed UI if this is the active asset
   if (sym !== state.activeSymbol) return;
 
-  // Cache live price + ATR for price-level computation
+  // Cache live price + ATR for price-level computation. atr_proxy is
+  // never present on the candle object itself — the backend publishes it
+  // as a separate top-level latest_close/latest_atr pair on each tick.
   state.latestClose = candle.close;
-  if (candle.atr_proxy && candle.atr_proxy > 0) state.latestATR = candle.atr_proxy;
+  if (data.latest_atr && data.latest_atr > 0) state.latestATR = data.latest_atr;
+  if (data.latest_close) state.latestClose = data.latest_close;
 
   // Ticker
   updateTickerUI(candle.close, candle.open);
