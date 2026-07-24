@@ -33,8 +33,25 @@ for a unit test that runs in CI alongside everything else.
 """
 import os
 
+import pytest
+
 _REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 _BARE_METAL_DIR = os.path.join(_REPO_ROOT, "deploy", "bare-metal")
+
+# Packaged docker-only tarballs (tools/package_release.sh docker <tag>)
+# deliberately strip deploy/bare-metal/ -- it doesn't belong in that
+# product. These tests only make sense against a checkout/package that
+# actually has it (the dev repo, or a bare-metal-only tarball); skip
+# cleanly rather than fail when it's legitimately absent. Found this gap
+# 2026-07-23 while verifying an unrelated fix against the docker tarball
+# specifically for the first time -- every prior verification of this file
+# only ever ran against the bare-metal tarball or the full dev checkout,
+# both of which always have deploy/bare-metal/ present, so a hard
+# FileNotFoundError here had never actually been exercised until then.
+pytestmark = pytest.mark.skipif(
+    not os.path.isdir(_BARE_METAL_DIR),
+    reason="deploy/bare-metal/ not present in this package (e.g. a docker-only tarball)",
+)
 
 
 def _read(rel_path: str) -> str:
