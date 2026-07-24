@@ -305,6 +305,56 @@ internet. If this session already did a clean reinstall per §7.5, doing
 that reinstall from beta-1.10.13 instead of beta-1.10.11 gets all of this
 for free.
 
+## 7.7. First clean rehearsal, backend side confirmed healthy (2026-07-23/24)
+
+Per Luis's call to get this fully working in a rehearsal environment before
+ever touching a real paid VPS (§7.5's rollback made clear why): a genuinely
+fresh `install.sh` run hit one real bug — `/opt/predictor/.venv` never got
+created, `predictor.service` crash-looped on `203/EXEC` (systemd's
+"`execve()` itself failed" code) with the restart counter past 200. Root
+cause was never fully pinned down (the `drwx------` permission theory Hermes
+proposed doesn't actually hold — root bypasses Linux DAC permission checks
+entirely, and `install.sh`'s own `[[ $EUID -eq 0 ]]` guard means the venv
+creation step already runs as root, so that directory's `0700` bit
+shouldn't have blocked it). Recreating the venv by hand (as root, `pip
+install -r requirements.txt`, `chown -R predictor:predictor`) fixed it
+immediately. **This might recur on the next fresh install** since the real
+cause is still unknown — if it does, capture `install.sh`'s actual output
+this time (does it reach the final "installed successfully" banner or stop
+silently before the venv step?) rather than just recreating the venv again.
+
+Once running: full backend smoke passed — `/api/status`, `/api/trades`,
+`/api/orderbook`, `/api/market-tickers`, `/api/news`, `/api/calendar`,
+`/api/assets` all 200 with live Bybit data, `/ws` verified with a real
+WebSocket handshake (not just a plain `curl`, which always 404s against a
+websocket-only Starlette route by design — that's not a bug, don't chase it
+again if it comes up). `predictor.service` stable for 200+ minutes.
+
+**Recurring friction, same root cause each time:** `/opt/predictor` (the
+`predictor` system user's home directory) is `0700` — only `predictor`
+itself and root can read/write/traverse into it at all. This has now
+blocked three different things run by a different account: a WS-probe
+script write, and a monitoring job's `tail` of `predictor.log`. None of
+these are bugs in the app — they're a real, structural side effect of a
+sensibly-private home directory conflicting with wanting other tooling to
+inspect the service from outside. Two real options, not yet decided:
+(a) narrow ACL grants (`setfacl`) for whichever specific account needs
+access, scoped to exactly what it needs — matches the pattern already used
+for the agent-relay credential-access decision earlier this incident; or
+(b) switch `predictor.service`'s `StandardOutput=`/`StandardError=` from
+`append:/opt/predictor/logs/predictor.log` to systemd's default (`journal`)
+so log access becomes `journalctl -u predictor`, gated by the standard
+`systemd-journal` group instead of raw filesystem permissions on a private
+home directory — cleaner long-term, but changes what `tail -f .../
+predictor.log` (already documented in `install.sh`'s own status banner)
+actually shows, so it's a real, if small, decision rather than a pure
+bugfix.
+
+**Still open:** the dashboard visual/toggle UI pass needs Hermes's Chrome
+CDP connection (`127.0.0.1:9222`) restored — that's Hermes-side tooling,
+not something fixable from this session. Everything backend-testable is
+confirmed healthy in the meantime.
+
 ## 8. How to pick this back up
 
 1. Confirm what state the live host is actually in — don't assume
