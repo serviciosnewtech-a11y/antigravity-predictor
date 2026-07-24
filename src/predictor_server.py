@@ -1714,8 +1714,21 @@ def chat_status():
             # Generous timeout: the relay's own /health does a real cached
             # test invocation of the underlying agent (not just a binary-
             # existence check), which can take a few seconds on a cache
-            # miss — matching AGENT_RELAY_HEALTHCHECK_TIMEOUT_S's default.
-            r = requests.get(f"{endpoint}/health", timeout=12)
+            # miss. Read AGENT_RELAY_HEALTHCHECK_TIMEOUT_S so this client-
+            # side wait always exceeds whatever budget the relay itself was
+            # actually configured with, plus a small buffer for network/
+            # processing overhead on top of the relay's own internal wait.
+            # This used to be a bare hardcoded `12` that silently ignored
+            # the env var entirely (the comment claimed it "matched the
+            # default" but nothing ever read it) -- an operator who
+            # correctly raised AGENT_RELAY_HEALTHCHECK_TIMEOUT_S above 10
+            # (e.g. to 15, to give a real CLI agent more headroom) got a
+            # client-side read timeout here before the relay's own longer
+            # budget ever got a chance to finish, misreported as "relay
+            # unreachable" when the relay was actually still working.
+            # Found live 2026-07-23.
+            _relay_timeout_budget = float(os.environ.get("AGENT_RELAY_HEALTHCHECK_TIMEOUT_S", "10"))
+            r = requests.get(f"{endpoint}/health", timeout=_relay_timeout_budget + 2)
             if r.status_code != 200:
                 return {"verified": False, "verify_note": f"relay /health returned HTTP {r.status_code}"}
             h = r.json()
