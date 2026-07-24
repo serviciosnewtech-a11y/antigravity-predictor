@@ -26,8 +26,8 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.17`.** Cut 2026-07-24 — dashboard chart
-history bump (§7.12). Prior tags in this batch: beta-1.10.10 through
+**Latest, current tag: `beta-1.10.18`.** Cut 2026-07-24 — split-chart
+toggle (§7.13). Recent chain: beta-1.10.17 (chart history bump, §7.12). Prior tags in this batch: beta-1.10.10 through
 beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10 forge scoring loop),
 beta-1.10.16 (§7.11 housekeeping bundle). All older references in this
 doc to "beta-1.10.9 is latest" pre-date those and are stale — don't
@@ -663,6 +663,21 @@ was only asking for 300 in its `/api/candles` fetch (~3 days of 15m vs
 the ~10.4 days actually available). Two-line fix: `limit=300` → `limit=
 1000` in `dashboard/app.js` at the two `fetchCandlesForSymbol*` call
 sites (lines 1254 + 1741). No backend change. Node syntax check clean.
+
+## 7.13. Split-chart toggle — beta-1.10.18, 2026-07-24
+
+The secondary reference chart (added beta-1.10.9) was always rendered
+with no way to hide it. Added a header button (◨ / ◧) next to the theme
+toggle that hides `.chart-panel-secondary` via a `.split-off` class on
+`#charts-split-row`. Primary chart auto-expands to fill because
+`.charts-split-row .chart-panel { flex: 1 }` — its ResizeObserver
+handles the resize call.
+
+State persists in `localStorage` under `ag-split` (`on` | `off`, default
+`on` for existing users). Aria-pressed toggles too. 3 files touched:
+`dashboard/index.html` (1-line button), `dashboard/style.css` (2 rules),
+`dashboard/app.js` (`initSplitChartToggle()` ~25 lines + one wire-up
+line in the DOMContentLoaded init sequence).
 
 ## 8. How to pick this back up
 

@@ -406,6 +406,13 @@ body.light-mode .tool-btn::after { background: rgba(240,242,247,0.98); }
 .charts-split-row .chart-panel:first-child {
   border-right: 1px solid var(--border-color);
 }
+/* Secondary chart toggle: when .split-off is on the row, hide the secondary
+   pane. The primary pane's flex:1 auto-expands to fill; its ResizeObserver
+   (initChart in app.js) picks up the width change and calls chart.resize().
+   Also drop the vertical border since there's no second panel to divide. */
+.charts-split-row.split-off .chart-panel-secondary { display: none; }
+.charts-split-row.split-off .chart-panel:first-child { border-right: none; }
+
 .chart-panel-secondary .panel-header { flex-wrap: wrap; gap: 8px; }
 .asset-selector-compact { gap: 4px; }
 .asset-selector-compact .asset-btn { padding: 4px 8px; font-size: 0.7rem; }

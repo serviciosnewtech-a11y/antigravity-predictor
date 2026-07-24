@@ -2211,6 +2211,34 @@ function initTheme() {
   });
 }
 
+// Split-chart toggle: hides/shows the secondary reference chart. When off,
+// the primary chart's flex:1 auto-expands to fill (CSS in style.css); the
+// primary chart's own ResizeObserver (initChart) picks up the width change
+// and calls chart.resize() -- no explicit resize needed here. localStorage
+// key is 'ag-split' with values 'on' | 'off', default 'on' to preserve the
+// pre-beta-1.10.18 behavior for existing users.
+function initSplitChartToggle() {
+  const btn = document.getElementById("split-chart-toggle");
+  const row = document.getElementById("charts-split-row");
+  if (!btn || !row) return;
+
+  const apply = (mode) => {
+    const off = mode === "off";
+    row.classList.toggle("split-off", off);
+    btn.setAttribute("aria-pressed", off ? "false" : "true");
+    btn.textContent = off ? "◧" : "◨";
+    btn.title = off ? "Show secondary reference chart" : "Hide secondary reference chart";
+  };
+
+  apply(localStorage.getItem("ag-split") || "on");
+  btn.addEventListener("click", () => {
+    const isOn = !row.classList.contains("split-off");
+    const next = isOn ? "off" : "on";
+    localStorage.setItem("ag-split", next);
+    apply(next);
+  });
+}
+
 function applyChartTheme(isLight) {
   const text   = isLight ? "#606878" : "#7a8494";
   const grid   = isLight ? "rgba(0,0,0,0.04)" : "rgba(255,255,255,0.03)";
@@ -2866,6 +2894,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initChart();
   initChart2();
   initTheme();
+  initSplitChartToggle();
   initToolbar();
   initTimeframeSelector();
   initAssetSelector();
