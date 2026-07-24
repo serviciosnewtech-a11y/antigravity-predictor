@@ -55,6 +55,20 @@ cp    "$REPO_SRC/requirements.txt" "$APP_DIR/" 2>/dev/null || true
 # on every fresh install. Found during pre-redeploy verification.
 cp    "$REPO_SRC/config.json" "$APP_DIR/config.json"
 
+# Force server.host to loopback for THIS product specifically. The repo's
+# config.json ships "0.0.0.0" because that's correct and necessary for
+# Docker (the container binds all interfaces internally; docker-compose.yml
+# never publishes predictor's own port to the host at all -- nginx is the
+# only container with a published port). Bare-metal has no such network
+# isolation: "0.0.0.0" here means predictor_server.py listens on the VPS's
+# real public interface directly, on plain HTTP, with zero authentication,
+# completely bypassing nginx (and whatever TLS/auth/rate-limiting it's
+# configured with) for anyone who reaches the port directly. Every other
+# bare-metal file (nginx.conf, signal_agent.service) already assumes
+# 127.0.0.1-only reachability -- this makes that assumption actually true.
+# Found 2026-07-23 auditing what "safely expose the dashboard" requires.
+sed -i 's/"host": *"0\.0\.0\.0"/"host": "127.0.0.1"/' "$APP_DIR/config.json"
+
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 chmod +x "$APP_DIR/retrain_all.sh"
 
@@ -200,6 +214,28 @@ cp "$APP_DIR/deploy/bare-metal/nginx.conf" /etc/nginx/sites-available/predictor
 ln -sf /etc/nginx/sites-available/predictor /etc/nginx/sites-enabled/predictor
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
+
+# ── Firewall ──────────────────────────────────────────────────────────────────
+# Defense in depth on top of the config.json loopback-bind fix above: even
+# with predictor_server.py correctly bound to 127.0.0.1, nothing was ever
+# actually blocking direct external access to it (or to agent_relay's 8645,
+# or any other port) at the host level. ufw here is deliberately minimal —
+# SSH plus whatever nginx needs — everything else stays denied by default.
+# Skips cleanly if ufw isn't installed rather than failing the whole install.
+if command -v ufw &>/dev/null; then
+    log "Configuring firewall (ufw): allowing SSH, HTTP, HTTPS only…"
+    ufw allow OpenSSH    >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1
+    ufw allow 80/tcp     >/dev/null 2>&1
+    ufw allow 443/tcp    >/dev/null 2>&1
+    ufw --force enable   >/dev/null 2>&1
+    log "Firewall enabled — only 22/80/443 reachable from outside this host."
+else
+    log "WARN: ufw not found — skipping firewall setup. Ports 18910/8645 are" \
+        "only bound to 127.0.0.1 (see config.json fix above), but with no" \
+        "host firewall at all, confirm your cloud provider's own security" \
+        "group/network ACL restricts inbound traffic before exposing this" \
+        "host publicly."
+fi
 
 # ── Initial macro fetch ───────────────────────────────────────────────────────
 log "Running initial macro data fetch…"
