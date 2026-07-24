@@ -26,9 +26,10 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.21`.** Cut 2026-07-24 — cover the
-unprotected sources with a `configstate.*.tar.gz` local backup (§7.16).
-Prior: `beta-1.10.20` — repo housekeeping (§7.15). Recent chain: beta-1.10.17 (chart history
+**Latest, current tag: `beta-1.10.22`.** Cut 2026-07-24 — off-host sync
+stub via `OFFSITE_BACKUP_CMD` env seam + `sync_offsite.timer` (§7.17).
+Prior: `beta-1.10.21` (configstate backup, §7.16), `beta-1.10.20` (repo
+housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
 bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13), beta-1.10.19
 (sidebar scroll discoverability, §7.14). Prior tags in this batch:
 beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10
@@ -859,11 +860,89 @@ default-dest-dir parity with the other two backup scripts.
 from beta-1.10.21 enables the new timer alongside the existing four
 timers. First run happens 9 minutes after boot, then every 12h.
 
+## 7.17. Off-host sync stub -- beta-1.10.22, 2026-07-24
+
+**Ships the mechanism, not the destination.** Luis's eventual off-host
+target is his personal cloud accessed from the VPS, but that piece is
+still being developed. Hardcoding an S3/B2/rclone client here would
+either force the choice ahead of that decision or box out whichever
+mechanism eventually gets picked. Instead, this tag ships scheduling +
+graceful-degradation logic; the actual pushing is delegated to whatever
+`OFFSITE_BACKUP_CMD` names in `.env`.
+
+**Contract:**
+- `tools/sync_backups_offsite.py`
+  - Reads `BACKUP_DIR` (default `/opt/predictor-backups` -- the same
+    directory the three local backup scripts write to; DATA_INVENTORY
+    row 19 identified this as the single sync point).
+  - Reads `OFFSITE_BACKUP_CMD` from env.
+  - Parses it with `shlex.split()` and runs via
+    `subprocess.run(argv, shell=False)` -- deliberately not shell=True,
+    so operator-provided strings can't inject metacharacters (regression
+    test in `test_sync_backups_offsite.py::test_shell_metacharacters_
+    are_not_interpreted` explicitly asserts this by trying and failing
+    to trigger a shell side effect).
+  - Exports `BACKUP_DIR` into the child env so custom wrapper scripts
+    can read it there.
+  - Exit codes: **0** when unset/whitespace/BACKUP_DIR-missing/wrapped-
+    command-succeeds; **wrapped command's exit code** on real push
+    failures; **127** on binary-not-found.
+
+**Systemd unit + timer:**
+- `deploy/bare-metal/sync_offsite.service` -- oneshot, User=predictor
+  Group=predictor, `EnvironmentFile=-/opt/predictor/.env` (optional --
+  missing .env is fine because the script handles empty
+  OFFSITE_BACKUP_CMD gracefully), same hardening pattern as the other
+  backup services (NoNewPrivileges/PrivateTmp/ProtectSystem=strict,
+  ReadOnlyPaths=/opt/predictor-backups + ReadWritePaths=/opt/predictor/
+  logs -- push tools only need to READ the backup dir).
+- `deploy/bare-metal/sync_offsite.timer` -- 6h cadence (matches the
+  signal_history / forge backup cadence -- no point pushing more often
+  than new snapshots exist). Enabled by default; the service degrades
+  gracefully when `OFFSITE_BACKUP_CMD` is empty so this never fail-loops
+  on a fresh install.
+
+**.env template:** both `.env.example` (dev template) AND the .env
+template that `install.sh` writes on first install now include an
+`OFFSITE_BACKUP_CMD=` line with commented examples for rclone / rsync /
+aws / azcopy.
+
+**install.sh:** enables + starts `sync_offsite.timer` alongside the
+other backup timers. Status banner prints either:
+- "Off-site sync: unconfigured -- set OFFSITE_BACKUP_CMD in .env when
+  ready" (default state), OR
+- "Off-site sync: OFFSITE_BACKUP_CMD is set -- sync_offsite.timer will
+  push $BACKUP_DIR every 6h" (once configured), so a fresh install
+  makes the seam obvious.
+
+**Tests:** 11 new (109 total, all green). Cover: unset env exits 0,
+whitespace-only env treated as unset, missing-backup-dir skips
+gracefully, successful command returns 0, failing command propagates
+exit code, specific non-zero (42) propagates, missing binary returns
+127, **argv-vs-shell injection guard** (a `; touch marker` attempt
+does NOT create the marker file), BACKUP_DIR exposed to child env,
+default backup dir matches the three local backup scripts.
+
+**Deliberately NOT in this tag:**
+- Any hardcoded off-host client. That's Luis's call once his personal
+  cloud is ready.
+- Encryption-at-rest for `.env` / `.htpasswd` on the push side. Those
+  are inside the `configstate.*.tar.gz` bundled by beta-1.10.21; if the
+  eventual destination doesn't provide server-side encryption, the
+  operator wraps the push command in whatever encryption tool they
+  prefer (rclone-encrypted-remote, `age`-then-push, etc.) -- that's a
+  configuration seam decision, not a code decision, and belongs in
+  OFFSITE_BACKUP_CMD.
+- Bandwidth throttling / partial-push resume. Every candidate tool
+  (rclone / rsync / aws s3 / azcopy) handles this natively; no reason
+  to reimplement it here.
+
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.21`** as of this writing — cover the
-   unprotected sources with `configstate.*.tar.gz` local backup
-   (§7.16), on top of beta-1.10.20's repo housekeeping (§7.15). Ignore the older references in
+1. **Latest tag is `beta-1.10.22`** as of this writing — off-host sync
+   stub (§7.17: `OFFSITE_BACKUP_CMD` env seam + `sync_offsite.timer`)
+   on top of beta-1.10.21's configstate backup (§7.16) on top of
+   beta-1.10.20's repo housekeeping (§7.15). Ignore the older references in
    this doc to "latest is 1.10.9" — those pre-date §7.6 through §7.15.
    Ignore `beta-1.11` (see §2 for the numbering trap).
 2. Confirm what state the live host is actually in — don't assume the

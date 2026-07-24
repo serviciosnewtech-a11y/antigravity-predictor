@@ -1,0 +1,30 @@
+[Unit]
+Description=Antigravity Predictor - push /opt/predictor-backups to off-host destination
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=predictor
+Group=predictor
+WorkingDirectory=/opt/predictor
+# OFFSITE_BACKUP_CMD is the "how to push" seam -- see .env.example for
+# rclone / rsync / aws / azcopy examples. Sourced from .env so the operator
+# can change it without editing this unit. EnvironmentFile= is optional
+# (-prefix) -- missing .env is fine, the script just logs "not configured,
+# skipping" and exits 0 so this doesn't fail-loop on a fresh install.
+EnvironmentFile=-/opt/predictor/.env
+ExecStart=/opt/predictor/.venv/bin/python /opt/predictor/tools/sync_backups_offsite.py
+StandardOutput=append:/opt/predictor/logs/sync_offsite.log
+StandardError=append:/opt/predictor/logs/sync_offsite.log
+
+# Same hardening pattern as the other backup services. The script only
+# READS from /opt/predictor-backups (push destination is external) and
+# writes only its own log, so ReadWritePaths is the log dir only.
+# ReadOnlyPaths gives the push tool visibility into the backup dir
+# without letting it modify local snapshots.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/predictor-backups
+ReadWritePaths=/opt/predictor/logs

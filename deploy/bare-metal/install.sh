@@ -181,6 +181,24 @@ SA_POLL_INTERVAL=30
 
 # ── Optional predictor URL override ───────────────────────────────────────────
 # PREDICTOR_URL=http://127.0.0.1:18910
+
+# ── Off-site backup sync (sync_offsite.timer) ────────────────────────────────
+# The "how to push" seam for tools/sync_backups_offsite.py. Unset by
+# default -- the timer stays on but the service exits 0 with a clear
+# "not configured, skipping" log line so it doesn't fail-loop. When
+# ready, set this to whatever pushes /opt/predictor-backups to your
+# off-host destination of choice. Examples (uncomment ONE, adjust the
+# destination):
+#
+# OFFSITE_BACKUP_CMD='rclone copy /opt/predictor-backups mydrive:predictor-backups'
+# OFFSITE_BACKUP_CMD='rsync -av --delete /opt/predictor-backups/ user@offsite:predictor-backups/'
+# OFFSITE_BACKUP_CMD='aws s3 sync /opt/predictor-backups s3://my-bucket/predictor-backups'
+# OFFSITE_BACKUP_CMD='azcopy sync /opt/predictor-backups https://my.blob.core.windows.net/predictor-backups'
+#
+# Argv-parsed (shlex.split), not shell-executed -- no metacharacter
+# injection surface. See tools/sync_backups_offsite.py for the full
+# design.
+OFFSITE_BACKUP_CMD=
 EOF
     chmod 600 "$ENV_FILE"
     chown "$APP_USER:$APP_USER" "$ENV_FILE"
@@ -247,6 +265,17 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
     "$APP_DIR/deploy/bare-metal/config_backup.service" > /etc/systemd/system/config_backup.service
 cp "$APP_DIR/deploy/bare-metal/config_backup.timer" /etc/systemd/system/config_backup.timer
 
+# sync_offsite -- push /opt/predictor-backups to an operator-configured
+# off-host destination. The "how" is OFFSITE_BACKUP_CMD (see .env.example
+# for rclone / rsync / aws / azcopy examples). Timer is enabled by
+# default; when OFFSITE_BACKUP_CMD is unset the service exits 0 with a
+# "not configured, skipping" log line so this never fail-loops on a fresh
+# install. See tools/sync_backups_offsite.py + HANDOFF §7.17. Added
+# beta-1.10.22.
+sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
+    "$APP_DIR/deploy/bare-metal/sync_offsite.service" > /etc/systemd/system/sync_offsite.service
+cp "$APP_DIR/deploy/bare-metal/sync_offsite.timer" /etc/systemd/system/sync_offsite.timer
+
 # forge_scorecard -- periodic evaluation pass over Forge trade history.
 # Reads forge_data/forge.db, writes strategy_scorecard + evaluation_history,
 # dumps a plain-language text summary to a directory OUTSIDE $APP_DIR (same
@@ -261,7 +290,7 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
 cp "$APP_DIR/deploy/bare-metal/forge_scorecard.timer" /etc/systemd/system/forge_scorecard.timer
 
 systemctl daemon-reload
-systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer forge_backup.timer config_backup.timer forge_scorecard.timer
+systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer forge_backup.timer config_backup.timer sync_offsite.timer forge_scorecard.timer
 log "Services enabled."
 
 # ── Basic auth ────────────────────────────────────────────────────────────────
@@ -341,6 +370,7 @@ systemctl start macro_refresh.timer
 systemctl start predictor_backup.timer
 systemctl start forge_backup.timer
 systemctl start config_backup.timer
+systemctl start sync_offsite.timer
 systemctl start forge_scorecard.timer
 # Always started — degrades gracefully (see agent_relay.service comment
 # above) rather than crashing if AGENT_RELAY_CMD's binary isn't installed.
@@ -408,6 +438,17 @@ log " Config/secrets backup: .env, htpasswd, config.json, models, persona"
 log "              memory bundled every 12h into $BACKUP_DIR as"
 log "              configstate.*.tar.gz. Run once now:"
 log "                sudo -u $APP_USER $APP_DIR/.venv/bin/python $APP_DIR/tools/backup_config_and_secrets.py"
+log ""
+# Off-site sync: report configuration status in the install banner so
+# a fresh install makes it obvious this seam exists (and that it's a
+# no-op until wired up). The timer starts either way; the service is a
+# graceful no-op when OFFSITE_BACKUP_CMD isn't set (see
+# tools/sync_backups_offsite.py).
+OFFSITE_STATUS_LINE="Off-site sync: unconfigured — set OFFSITE_BACKUP_CMD in $ENV_FILE when ready (see .env template for rclone/rsync/aws/azcopy examples)."
+if grep -qE '^OFFSITE_BACKUP_CMD=..*$' "$ENV_FILE" 2>/dev/null; then
+    OFFSITE_STATUS_LINE="Off-site sync: OFFSITE_BACKUP_CMD is set — sync_offsite.timer will push $BACKUP_DIR every 6h."
+fi
+log " $OFFSITE_STATUS_LINE"
 log ""
 log " Forge scorecard: strategy verdicts computed hourly, dumped to"
 log "                  $FORGE_SCORECARD_DIR/scorecard.txt"

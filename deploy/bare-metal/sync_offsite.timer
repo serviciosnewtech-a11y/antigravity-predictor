@@ -1,0 +1,16 @@
+[Unit]
+Description=Push /opt/predictor-backups off-host periodically
+Requires=sync_offsite.service
+
+[Timer]
+# 6h cadence -- matches the signal_history / forge backup cadence. No
+# point pushing more often than new snapshots exist. This runs 15 minutes
+# after boot (later than the local backup timers so it has fresh data to
+# push after a reboot) and every 6h thereafter.
+OnBootSec=15min
+OnUnitActiveSec=6h
+AccuracySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
