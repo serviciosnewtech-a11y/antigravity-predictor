@@ -1,0 +1,30 @@
+[Unit]
+Description=Antigravity Predictor - config/secrets/models durable backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=predictor
+Group=predictor
+WorkingDirectory=/opt/predictor
+# APP_DIR/BACKUP_DIR/HTPASSWD_PATH/CONFIGSTATE_BACKUP_RETENTION_COUNT all
+# have safe defaults in tools/backup_config_and_secrets.py itself -- no
+# .env dependency, same principle as predictor_backup.service /
+# forge_backup.service (see LIVE_DEPLOY_NOTES.md #2 for why .env absence
+# must not break durable-data services).
+ExecStart=/opt/predictor/.venv/bin/python /opt/predictor/tools/backup_config_and_secrets.py
+StandardOutput=append:/opt/predictor/logs/config_backup.log
+StandardError=append:/opt/predictor/logs/config_backup.log
+
+# Same hardening pattern as predictor_backup.service / forge_backup.service.
+# Extra wrinkle: /etc/nginx/.htpasswd (DATA_INVENTORY row 10) is NOT under
+# /opt/predictor, so ProtectSystem=strict would hide it entirely -- add it
+# as an explicit ReadOnlyPaths so the process can read it without gaining
+# any write access to /etc. ReadWritePaths still lists only the backup
+# destination + logs (the source dirs are read only; ProtectSystem=strict
+# already keeps the rest of / off-limits).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/nginx/.htpasswd
+ReadWritePaths=/opt/predictor/logs /opt/predictor-backups

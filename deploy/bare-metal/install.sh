@@ -236,6 +236,17 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
     "$APP_DIR/deploy/bare-metal/forge_backup.service" > /etc/systemd/system/forge_backup.service
 cp "$APP_DIR/deploy/bare-metal/forge_backup.timer" /etc/systemd/system/forge_backup.timer
 
+# config_backup -- periodic durable backup of the "unprotected" sources
+# called out as coverage=none in docs/DATA_INVENTORY.md: .env, htpasswd,
+# persona memory, config.json, model_*.txt, model metadata/metrics
+# reports. Same $BACKUP_DIR as predictor_backup / forge_backup; bundled as
+# one configstate.<stamp>.tar.gz per run (they change together, restoring
+# piecewise is more error-prone than as a set). 12h cadence, distinct
+# from the SQLite backups' 6h. Added beta-1.10.21.
+sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
+    "$APP_DIR/deploy/bare-metal/config_backup.service" > /etc/systemd/system/config_backup.service
+cp "$APP_DIR/deploy/bare-metal/config_backup.timer" /etc/systemd/system/config_backup.timer
+
 # forge_scorecard -- periodic evaluation pass over Forge trade history.
 # Reads forge_data/forge.db, writes strategy_scorecard + evaluation_history,
 # dumps a plain-language text summary to a directory OUTSIDE $APP_DIR (same
@@ -250,7 +261,7 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
 cp "$APP_DIR/deploy/bare-metal/forge_scorecard.timer" /etc/systemd/system/forge_scorecard.timer
 
 systemctl daemon-reload
-systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer forge_backup.timer forge_scorecard.timer
+systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer forge_backup.timer config_backup.timer forge_scorecard.timer
 log "Services enabled."
 
 # ── Basic auth ────────────────────────────────────────────────────────────────
@@ -329,6 +340,7 @@ systemctl start predictor
 systemctl start macro_refresh.timer
 systemctl start predictor_backup.timer
 systemctl start forge_backup.timer
+systemctl start config_backup.timer
 systemctl start forge_scorecard.timer
 # Always started — degrades gracefully (see agent_relay.service comment
 # above) rather than crashing if AGENT_RELAY_CMD's binary isn't installed.
@@ -391,6 +403,11 @@ log " Data backup: signal_history.db backed up every 6h to $BACKUP_DIR"
 log "              (deliberately outside $APP_DIR — survives a bad reinstall"
 log "              or a wipe of the app directory). Run once now:"
 log "                sudo -u $APP_USER $APP_DIR/.venv/bin/python $APP_DIR/tools/backup_signal_log.py"
+log ""
+log " Config/secrets backup: .env, htpasswd, config.json, models, persona"
+log "              memory bundled every 12h into $BACKUP_DIR as"
+log "              configstate.*.tar.gz. Run once now:"
+log "                sudo -u $APP_USER $APP_DIR/.venv/bin/python $APP_DIR/tools/backup_config_and_secrets.py"
 log ""
 log " Forge scorecard: strategy verdicts computed hourly, dumped to"
 log "                  $FORGE_SCORECARD_DIR/scorecard.txt"

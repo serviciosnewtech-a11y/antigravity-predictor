@@ -1,0 +1,17 @@
+[Unit]
+Description=Run config+secrets+models backup periodically
+Requires=config_backup.service
+
+[Timer]
+# 12h cadence -- config.json, models, and .env change far less often than
+# the trade/signal DBs (a retrain rewrites models once every few days; a
+# recalibrate rewrites config even more rarely; .env changes on operator
+# hand-edit). 6h would be overkill; a daily cadence would leave up to 24h
+# between a rotation and a snapshot. 12h is the compromise.
+OnBootSec=9min
+OnUnitActiveSec=12h
+AccuracySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

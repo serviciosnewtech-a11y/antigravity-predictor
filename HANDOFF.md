@@ -26,8 +26,9 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.20`.** Cut 2026-07-24 — repo
-housekeeping (§7.15). Recent chain: beta-1.10.17 (chart history
+**Latest, current tag: `beta-1.10.21`.** Cut 2026-07-24 — cover the
+unprotected sources with a `configstate.*.tar.gz` local backup (§7.16).
+Prior: `beta-1.10.20` — repo housekeeping (§7.15). Recent chain: beta-1.10.17 (chart history
 bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13), beta-1.10.19
 (sidebar scroll discoverability, §7.14). Prior tags in this batch:
 beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10
@@ -793,11 +794,76 @@ Prefer that as the ground-truth data map going forward; this HANDOFF is
 still the running narrative, but the inventory is the point-in-time
 audit.
 
+## 7.16. Cover the unprotected sources -- beta-1.10.21, 2026-07-24
+
+Filled every DATA_INVENTORY coverage=none row that was cheap to close --
+rows 4 (persona memory), 5 (production models), 6 (config.json), 7 (model
+metadata/metrics reports), 9 (.env), 10 (/etc/nginx/.htpasswd). All bundled
+into a single `configstate.<stamp>.tar.gz` per run, landing in the same
+`/opt/predictor-backups/` directory as the two existing SQLite backups.
+
+**Design decisions worth remembering:**
+- One tarball for all sources, not one file per source. They change
+  together (a retrain rewrites models + metadata + report; a recalibrate
+  rewrites config + report; install rotates .env + htpasswd), and
+  restoring them piecewise is more error-prone than as a consistent set.
+- Same target dir (`/opt/predictor-backups/`) as
+  signal_history.*.db / forge.*.db backups. One place to look for all
+  durable snapshots; one directory to eventually point off-host sync at
+  (see beta-1.10.22 for that mechanism).
+- Retention scoped to `configstate.*.tar.gz` -- the retention pass MUST
+  NOT touch sibling `signal_history.*.db` / `forge.*.db` snapshots. Same
+  pattern as the two SQLite backups' scoped prunes; regression test asserts
+  it.
+- 12h cadence (`config_backup.timer`), distinct from the two SQLite
+  backups' 6h. Config/models/persona rotate far less often than trade
+  ticks accumulate; 6h would be overkill, daily would leave up to 24h
+  between a rotation and a snapshot.
+- Systemd hardening: `/etc/nginx/.htpasswd` is deliberately outside
+  `/opt/predictor`, so `ProtectSystem=strict` would hide it. Added
+  `ReadOnlyPaths=/etc/nginx/.htpasswd` -- read-only access explicitly, no
+  writes to /etc, all other paths still blocked. Same
+  `NoNewPrivileges=true`/`PrivateTmp=true`/`ProtectSystem=strict`/
+  `ReadWritePaths=...` pattern as the other two backup services.
+- Missing sources are skipped and logged, not fatal. A fresh install with
+  no `.env` written yet, or no persona memory yet, still produces a
+  useful tarball of whatever IS present.
+- Retention env var: `CONFIGSTATE_BACKUP_RETENTION_COUNT`, default 30
+  (independent of the other two -- these tarballs are small).
+
+**Files shipped:**
+- New: `tools/backup_config_and_secrets.py`,
+  `deploy/bare-metal/config_backup.{service,timer}`,
+  `tests/test_backup_config_and_secrets.py` (8 tests).
+- Modified: `deploy/bare-metal/install.sh` (daemon-reload / enable /
+  start list updated to include `config_backup.timer`; status banner
+  gains a "Config/secrets backup" line).
+
+**Tests:** 8 new (98 total, all green). Same shape as
+test_backup_forge_db.py -- data-lands-in-tarball, missing-source graceful
+handling, retention scoping, distinct-filename collision protection,
+default-dest-dir parity with the other two backup scripts.
+
+**Deliberately NOT included in this tarball:**
+- `.retrain_cache/`, `data/raw/`, `data/datasets/` (rows 12/13/14) --
+  regen-slow but multi-GB, would blow up backup size. If a user really
+  wants them backed up they can extend this tool later; today, "re-run
+  retrain_all.sh" is the accepted recovery path.
+- `logs/*.log` (row 11) -- ephemeral, post-mortem only, unbounded growth
+  is a separate `logrotate.d` problem.
+- `data/macro/*.parquet` (row 8) -- self-healing on next hourly
+  `macro_refresh.timer` tick, no runtime dependency on the backed-up
+  copy.
+
+**Not yet applied to any host as of tag time.** Fresh `install.sh` run
+from beta-1.10.21 enables the new timer alongside the existing four
+timers. First run happens 9 minutes after boot, then every 12h.
+
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.20`** as of this writing — repo
-   housekeeping (§7.15) on top of the beta-1.10.17/18/19 dashboard
-   micro-fixes (§7.12/§7.13/§7.14). Ignore the older references in
+1. **Latest tag is `beta-1.10.21`** as of this writing — cover the
+   unprotected sources with `configstate.*.tar.gz` local backup
+   (§7.16), on top of beta-1.10.20's repo housekeeping (§7.15). Ignore the older references in
    this doc to "latest is 1.10.9" — those pre-date §7.6 through §7.15.
    Ignore `beta-1.11` (see §2 for the numbering trap).
 2. Confirm what state the live host is actually in — don't assume the
