@@ -20,7 +20,7 @@ die() { echo "[ERROR] $*"; exit 1; }
 # ── System deps ───────────────────────────────────────────────────────────────
 log "Installing system packages…"
 apt-get update -qq
-apt-get install -y -qq python3 python3-pip python3-venv nginx certbot python3-certbot-nginx git
+apt-get install -y -qq python3 python3-pip python3-venv nginx certbot python3-certbot-nginx git apache2-utils
 
 # ── App user ──────────────────────────────────────────────────────────────────
 if ! id "$APP_USER" &>/dev/null; then
@@ -208,9 +208,44 @@ systemctl daemon-reload
 systemctl enable predictor macro_refresh.timer signal_agent agent_relay
 log "Services enabled."
 
+# ── Basic auth ────────────────────────────────────────────────────────────────
+# Every route in predictor_server.py is unauthenticated by design (it's a
+# single-operator advisory tool, not a multi-tenant SaaS) -- fine as long as
+# nothing outside 127.0.0.1 can reach it, but the moment this goes on the
+# public internet (see the firewall section below and nginx.conf), anyone
+# who finds the IP/domain gets full access to the dashboard, API, and chat
+# with zero login wall. This is a stopgap, not a real access-control system:
+# one shared username/password for everyone who's given it, enforced by
+# nginx before a request ever reaches predictor_server.py. Fine for "let a
+# few people poke around and find bugs"; NOT sufficient for real per-user
+# accounts/audit trails -- that needs actual app-level auth, a bigger,
+# separate piece of work. ENABLE_BASIC_AUTH=false skips this entirely (e.g.
+# for a purely local/VPN-only install that doesn't want a password wall).
+# Idempotent: leaves an existing /etc/nginx/.htpasswd alone on a rerun
+# rather than silently rotating credentials shared testers already have.
+ENABLE_BASIC_AUTH="${ENABLE_BASIC_AUTH:-true}"
+HTPASSWD_FILE=/etc/nginx/.htpasswd
+if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
+    if [[ ! -f "$HTPASSWD_FILE" ]]; then
+        BASIC_AUTH_USER="${BASIC_AUTH_USER:-predictor}"
+        BASIC_AUTH_PASS="${BASIC_AUTH_PASS:-$(openssl rand -base64 18 | tr -d '=+/' | head -c 20)}"
+        htpasswd -cb "$HTPASSWD_FILE" "$BASIC_AUTH_USER" "$BASIC_AUTH_PASS" >/dev/null
+        log "Basic auth enabled — user: $BASIC_AUTH_USER  password: $BASIC_AUTH_PASS"
+        log "  (save this now — it is only printed once; rotate later with: htpasswd $HTPASSWD_FILE $BASIC_AUTH_USER)"
+    else
+        log "Basic auth: $HTPASSWD_FILE already exists — leaving existing credentials in place."
+    fi
+else
+    log "Basic auth disabled (ENABLE_BASIC_AUTH=false) — dashboard will have no login wall once exposed."
+fi
+
 # ── Nginx ─────────────────────────────────────────────────────────────────────
 log "Configuring nginx…"
 cp "$APP_DIR/deploy/bare-metal/nginx.conf" /etc/nginx/sites-available/predictor
+if [[ "$ENABLE_BASIC_AUTH" != "true" ]]; then
+    # Strip the auth_basic lines nginx.conf ships with by default.
+    sed -i '/auth_basic/d' /etc/nginx/sites-available/predictor
+fi
 ln -sf /etc/nginx/sites-available/predictor /etc/nginx/sites-enabled/predictor
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
@@ -288,4 +323,19 @@ log ""
 log " Backend config: edit $APP_DIR/.env then restart predictor/signal_agent/agent_relay"
 log " Retrain:  cd $APP_DIR && bash retrain_all.sh"
 log " Status:   systemctl status predictor"
+log ""
+if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
+    log " Dashboard access: username/password required (see 'Basic auth enabled' line"
+    log "                   above for credentials — only printed once, on first install)."
+    log "                   Rotate:  htpasswd $HTPASSWD_FILE <user>"
+    log "                   Disable: remove 'auth_basic*' lines from"
+    log "                            /etc/nginx/sites-available/predictor, then: nginx -t && systemctl reload nginx"
+else
+    log " Dashboard access: NO login wall (ENABLE_BASIC_AUTH=false) — anyone who reaches"
+    log "                   this host on 80/443 has full access."
+fi
+log ""
+log " Before exposing this host publicly: point a domain at it and run"
+log "   certbot --nginx -d your.domain.com"
+log " to enable HTTPS — nginx.conf ships with plain HTTP only until then."
 log "======================================================"
