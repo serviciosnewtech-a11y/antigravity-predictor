@@ -18,7 +18,9 @@ const state = {
   // Active symbol / display timeframe
   activeSymbol: "BTC/USDT",
   activeTimeframe: "15m",
-  displayCandles: [],
+  // Timeframe to restore when leaving XAU/USD's forced-1d macro view for a
+  // real trading symbol -- see switchAsset()/switchTimeframe() below.
+  lastTradingTimeframe: "15m",
 
   // Thresholds
   buyThreshold:        0.320,
@@ -132,6 +134,10 @@ function timeframeSeconds(tf) {
 
 function switchTimeframe(tf) {
   state.activeTimeframe = tf || "15m";
+  // Remember this as the timeframe to come back to after a detour through
+  // XAU/USD's forced-1d macro view -- only meaningful while on a real
+  // trading symbol, not while already on Gold.
+  if (!isMacroDisplaySymbol(state.activeSymbol)) state.lastTradingTimeframe = state.activeTimeframe;
   updateTimeframeUI();
   state.markers = [];
   if (state.candleSeries) state.candleSeries.setMarkers([]);
@@ -1159,6 +1165,107 @@ function initChart() {
 }
 
 
+// ── Secondary Chart (side-by-side reference view) ──────────────────
+// Independent symbol from the main chart, candles only -- no drawing
+// tools/DOM/object tree, those stay tied to the primary chart's state.
+// Added 2026-07-23 so the page can show two symbols at once.
+state.chart2 = null;
+state.candleSeries2 = null;
+state.activeSymbol2 = "ETH/USDT";
+
+function initChart2() {
+  const container = document.getElementById("tv-chart-container-2");
+  if (!container || typeof LightweightCharts === "undefined") return;
+
+  state.chart2 = LightweightCharts.createChart(container, {
+    layout: {
+      background: { type: "solid", color: "transparent" },
+      textColor:  "#7a8494",
+      fontSize:   12,
+      fontFamily: "Outfit",
+    },
+    grid: {
+      vertLines: { color: "rgba(255,255,255,0.03)" },
+      horzLines: { color: "rgba(255,255,255,0.03)" },
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: "rgba(255,255,255,0.07)", autoScale: true },
+    timeScale: {
+      borderColor:    "rgba(255,255,255,0.07)",
+      timeVisible:    true,
+      secondsVisible: false,
+    },
+  });
+
+  state.candleSeries2 = state.chart2.addCandlestickSeries({
+    upColor:        "#00e676",
+    downColor:      "#ff3d00",
+    borderUpColor:  "#00e676",
+    borderDownColor:"#ff3d00",
+    wickUpColor:    "#00e676",
+    wickDownColor:  "#ff3d00",
+  });
+
+  new ResizeObserver(() => {
+    const r = container.getBoundingClientRect();
+    state.chart2.resize(r.width, r.height);
+  }).observe(container);
+}
+
+function initAssetSelector2() {
+  const el = document.getElementById("asset-selector-2");
+  if (!el) return;
+  el.addEventListener("click", e => {
+    const btn = e.target.closest(".asset-btn");
+    if (!btn) return;
+    const sym = btn.dataset.symbol;
+    if (!sym || sym === state.activeSymbol2) return;
+    switchAsset2(sym);
+  });
+}
+
+function switchAsset2(sym) {
+  state.activeSymbol2 = sym;
+
+  document.querySelectorAll("#asset-selector-2 .asset-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.symbol === sym);
+  });
+  const titleEl = document.getElementById("chart-title-2");
+  if (titleEl) titleEl.textContent = isMacroDisplaySymbol(sym) ? `${sym} · 1D Macro Display` : `${sym} · 15M`;
+
+  // Prefer whatever's already cached from the live tick/init stream (every
+  // symbol's snapshot is cached regardless of which one is "active" -- see
+  // handleTick()/handleInit()) so switching feels instant; fall back to a
+  // fresh REST fetch (macro symbols like XAU/USD never appear on 15m, so
+  // they always take this path).
+  const cached = state.snapshots[sym];
+  if (!isMacroDisplaySymbol(sym) && cached?.candles?.length) {
+    state.candleSeries2.setData(cached.candles);
+    if (state.chart2) state.chart2.timeScale().fitContent();
+  } else {
+    fetchCandlesForSymbol2(sym);
+  }
+}
+
+function fetchCandlesForSymbol2(sym) {
+  if (!state.candleSeries2) return;
+  const enc = encodeURIComponent(sym);
+  const tf  = encodeURIComponent(isMacroDisplaySymbol(sym) ? "1d" : "15m");
+  fetchJsonWithFallback(`/api/candles?symbol=${enc}&timeframe=${tf}&limit=300`)
+    .then(({ data: candles }) => {
+      if (!candles || candles.length === 0) throw new Error(`No candles returned for ${sym}`);
+      state.candleSeries2.setData(candles);
+      if (state.chart2) state.chart2.timeScale().fitContent();
+    })
+    .catch(e => {
+      console.error("fetchCandles2:", e);
+      state.candleSeries2.setData([]);
+      const titleEl = document.getElementById("chart-title-2");
+      if (titleEl) titleEl.textContent = `${sym} · unavailable`;
+    });
+}
+
+
 // ── Toolbar Wiring ─────────────────────────────────────────────────
 // Active sub-tools per category state
 const categoryActiveTools = {
@@ -1566,8 +1673,16 @@ function initAssetSelector() {
 }
 
 function switchAsset(sym) {
+  const wasMacro = isMacroDisplaySymbol(state.activeSymbol);
   state.activeSymbol = sym;
-  if (isMacroDisplaySymbol(sym)) state.activeTimeframe = "1d";
+  if (isMacroDisplaySymbol(sym)) {
+    state.activeTimeframe = "1d";
+  } else if (wasMacro) {
+    // Leaving Gold's forced-1d macro view for a real trading symbol --
+    // restore whatever timeframe the user was actually trading on before,
+    // instead of leaving activeTimeframe stuck on "1d".
+    state.activeTimeframe = state.lastTradingTimeframe || "15m";
+  }
 
   // Update button states
   document.querySelectorAll("#asset-selector .asset-btn").forEach(b => {
@@ -1626,7 +1741,6 @@ function fetchCandlesForSymbol(sym) {
   fetchJsonWithFallback(`/api/candles?symbol=${enc}&timeframe=${tf}&limit=300`)
     .then(({ data: candles }) => {
       if (!candles || candles.length === 0) throw new Error(`No ${state.activeTimeframe} candles returned for ${sym}`);
-      state.displayCandles = candles;
       state.candleSeries.setData(candles);
       const last = candles[candles.length - 1];
       state.latestClose = last.close;
@@ -1640,7 +1754,6 @@ function fetchCandlesForSymbol(sym) {
     })
     .catch(e => {
       console.error("fetchCandles:", e);
-      state.displayCandles = [];
       if (state.candleSeries) state.candleSeries.setData([]);
       const title = document.getElementById("chart-title");
       if (title) title.textContent = `${sym} · ${timeframeLabel(state.activeTimeframe)} unavailable`;
@@ -1649,8 +1762,18 @@ function fetchCandlesForSymbol(sym) {
 
 function applySnapshot(sym, snap) {
   if (snap.candles && snap.candles.length > 0) {
-    const candles = state.activeTimeframe === "15m" ? snap.candles : state.displayCandles;
-    state.candleSeries.setData(candles && candles.length ? candles : snap.candles);
+    if (state.activeTimeframe === "15m") {
+      state.candleSeries.setData(snap.candles);
+    } else {
+      // Higher-timeframe (non-15m) candles are asset+timeframe specific and
+      // only ever come from a fresh REST fetch (fetchCandlesForSymbol) --
+      // never reuse a previously-fetched batch here. This used to read a
+      // single shared state.displayCandles regardless of which symbol it
+      // was actually fetched for, which is what caused switching away from
+      // XAU/USD's forced-1d macro view to another asset to keep showing
+      // Gold's stale daily candles instead of the new symbol's data.
+      fetchCandlesForSymbol(sym);
+    }
     state.predLongSeries.setData([]);
     state.predShortSeries.setData([]);
 
@@ -1729,6 +1852,15 @@ function handleInit(data) {
     });
       applySnapshot(state.activeSymbol, state.snapshots[state.activeSymbol]);
     startEnrichedPoll(state.activeSymbol);
+
+    // Seed the secondary chart too, now that live snapshots exist.
+    const snap2 = state.snapshots[state.activeSymbol2];
+    if (state.candleSeries2 && snap2?.candles?.length) {
+      state.candleSeries2.setData(snap2.candles);
+      if (state.chart2) state.chart2.timeScale().fitContent();
+    } else if (state.candleSeries2) {
+      fetchCandlesForSymbol2(state.activeSymbol2);
+    }
   }
 }
 
@@ -1763,6 +1895,14 @@ function handleTick(data) {
   // Trigger alert logs if signal triggers
   if (["BUY", "SELL", "EXIT"].includes(data.signal)) {
     addAlertNotification(sym, `Engine ${data.signal} @ $${candle.close.toLocaleString()}`);
+  }
+
+  // Secondary chart always displays 15m for real trading symbols (it has
+  // no timeframe selector of its own), so every tick for its selected
+  // symbol applies directly -- independent of the primary chart's active
+  // symbol/timeframe.
+  if (sym === state.activeSymbol2 && state.candleSeries2) {
+    state.candleSeries2.update(candle);
   }
 
   // Only update chart/detailed UI if this is the active asset
@@ -2724,10 +2864,13 @@ window.syncObjectTree = function() {
 // ── Bootstrap ──────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   initChart();
+  initChart2();
   initTheme();
   initToolbar();
   initTimeframeSelector();
   initAssetSelector();
+  initAssetSelector2();
+  fetchCandlesForSymbol2(state.activeSymbol2);
   updateMarketSourceUI(state.activeSymbol);
   updateAdvisoryBubble(state.activeSymbol);
   connectWS();

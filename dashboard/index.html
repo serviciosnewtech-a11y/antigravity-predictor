@@ -352,26 +352,48 @@
 
         <!-- Chart Column -->
         <section class="grid-left-pane">
-          <div class="panel chart-panel">
-            <div class="panel-header">
-              <div class="panel-title-group">
-                <h2 id="chart-title">BTC/USDT · 15M Scalping</h2>
-                <div class="advisory-bubble" id="advisory-agent-bubble">
-                  <span id="advisory-agent-text"></span>
+          <div class="charts-split-row" id="charts-split-row">
+            <div class="panel chart-panel">
+              <div class="panel-header">
+                <div class="panel-title-group">
+                  <h2 id="chart-title">BTC/USDT · 15M Scalping</h2>
+                  <div class="advisory-bubble" id="advisory-agent-bubble">
+                    <span id="advisory-agent-text"></span>
+                  </div>
+                </div>
+                <div class="chart-legend">
+                  <span class="legend-item"><span class="legend-dot green"></span>Buy</span>
+                  <span class="legend-item"><span class="legend-dot orange"></span>Sell</span>
+                  <span class="legend-item"><span class="legend-dot red"></span>Exit</span>
+                  <!-- Drawing tooltip -->
+                  <span class="drawing-hint" id="drawing-hint"></span>
                 </div>
               </div>
-              <div class="chart-legend">
-                <span class="legend-item"><span class="legend-dot green"></span>Buy</span>
-                <span class="legend-item"><span class="legend-dot orange"></span>Sell</span>
-                <span class="legend-item"><span class="legend-dot red"></span>Exit</span>
-                <!-- Drawing tooltip -->
-                <span class="drawing-hint" id="drawing-hint"></span>
+              <div class="panel-body">
+                <div id="tv-chart-container" class="chart-container-wrapper"></div>
+                <!-- Drawing overlay canvas -->
+                <canvas id="drawing-canvas" class="drawing-canvas"></canvas>
               </div>
             </div>
-            <div class="panel-body">
-              <div id="tv-chart-container" class="chart-container-wrapper"></div>
-              <!-- Drawing overlay canvas -->
-              <canvas id="drawing-canvas" class="drawing-canvas"></canvas>
+
+            <!-- Secondary chart: independent symbol, read-only reference view
+                 (no drawing tools / DOM / object tree -- those stay primary-chart
+                 only). Added 2026-07-23 for side-by-side comparison. -->
+            <div class="panel chart-panel chart-panel-secondary">
+              <div class="panel-header">
+                <div class="panel-title-group">
+                  <h2 id="chart-title-2">ETH/USDT · 15M</h2>
+                </div>
+                <div class="asset-selector asset-selector-compact" id="asset-selector-2">
+                  <button class="asset-btn" id="btn2-BTC/USDT" data-symbol="BTC/USDT">₿ BTC</button>
+                  <button class="asset-btn active" id="btn2-ETH/USDT" data-symbol="ETH/USDT">Ξ ETH</button>
+                  <button class="asset-btn" id="btn2-SOL/USDT" data-symbol="SOL/USDT">◎ SOL</button>
+                  <button class="asset-btn" id="btn2-XAU/USD" data-symbol="XAU/USD">Au GOLD</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div id="tv-chart-container-2" class="chart-container-wrapper"></div>
+              </div>
             </div>
           </div>
         </section>

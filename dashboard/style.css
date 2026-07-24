@@ -391,6 +391,25 @@ body.light-mode .tool-btn::after { background: rgba(240,242,247,0.98); }
 .panel:last-child { border-bottom: none; }
 .chart-panel { flex: 1; min-height: 0; }
 
+/* ── Split chart row (main + secondary reference chart) ─────── */
+.charts-split-row {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+}
+.charts-split-row .chart-panel {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+.charts-split-row .chart-panel:first-child {
+  border-right: 1px solid var(--border-color);
+}
+.chart-panel-secondary .panel-header { flex-wrap: wrap; gap: 8px; }
+.asset-selector-compact { gap: 4px; }
+.asset-selector-compact .asset-btn { padding: 4px 8px; font-size: 0.7rem; }
+
 .panel-header {
   padding: 12px 18px;
   display: flex;
@@ -556,8 +575,14 @@ body.light-mode .tool-btn::after { background: rgba(240,242,247,0.98); }
 .metric-value.negative { color: var(--color-red); }
 
 /* ── Trade Log ─────────────────────────────────────────────── */
-.logs-panel { flex: 1; min-height: 200px; }
-.logs-panel .panel-body { padding: 0 12px 12px; }
+/* Bounded height + internal scroll: this panel sits last in
+   .grid-right-pane, which has no fixed height of its own (it just grows
+   and lets the whole sidebar scroll) -- without a max-height here, the
+   trade history table had nothing to clamp against, so its .scrollable
+   body (overflow-y:auto) never actually had to scroll; it just grew
+   forever and pushed the panel below the fold instead. Fixed 2026-07-23. */
+.logs-panel { flex: 1; min-height: 200px; max-height: 340px; display: flex; flex-direction: column; }
+.logs-panel .panel-body { padding: 0 12px 12px; min-height: 0; }
 
 .data-table {
   width: 100%; border-collapse: collapse;
