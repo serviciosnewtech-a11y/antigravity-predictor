@@ -131,6 +131,29 @@ install, absolute path, per LIVE_DEPLOY_NOTES.md #7's fix steps), verify it
 by hand first, then set it in `.env`, restart `agent_relay`, recheck
 `/health` → `/api/chat/status` → a real `/api/chat` call.
 
+**Update, same incident, later same day:** progress since the above —
+`agent_relay.service` was replaced with the canonical unit and given a
+dedicated OS user (not `predictor`) so the internet-facing dashboard
+process never gains a path to Hermes's own credentials at
+`/opt/predictor-metis/.hermes/.env` (that access boundary was deliberately
+kept locked down — this was a real security decision, explicitly confirmed
+with Luis, not a plumbing fix; see `LIVE_DEPLOY_NOTES.md` for the pattern
+if this needs repeating on another host). A real Hermes CLI invocation
+under the relay's own environment then worked, ~5.8s. Next symptom:
+`/api/chat/status` still reported `relay unreachable: ... Read timed out
+(read timeout=12)`. Root cause found and fixed in beta-1.10.11: `chat_
+status()`'s local-relay `/health` probe in `src/predictor_server.py` had a
+**bare hardcoded `timeout=12`** that silently ignored
+`AGENT_RELAY_HEALTHCHECK_TIMEOUT_S` entirely, despite a comment claiming it
+tracked that env var. Live `.env` had that var raised to 15 (reasonable, to
+give a real agent more health-check headroom), so predictor's client-side
+wait was giving up *before* the relay's own longer, actually-configured
+budget could finish. Fixed to read the env var properly
+(`relay_budget + 2s`). **Not yet applied to the live host as of this
+writing** — pull beta-1.10.11 (or just the one-line fix in `src/
+predictor_server.py`), restart `predictor.service`, recheck
+`/api/chat/status` → a real `/api/chat` call.
+
 **Also still open:** whether the relay timeout that was originally observed
 at a hard "10.0s" was `AGENT_RELAY_TIMEOUT_S` explicitly set to 10 somewhere
 in the live `.env` (worth reverting to the 120s default now that warm-up
