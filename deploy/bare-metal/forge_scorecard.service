@@ -1,0 +1,27 @@
+[Unit]
+Description=Antigravity Predictor - Forge scorecard evaluation pass
+After=network.target
+
+[Service]
+Type=oneshot
+User=predictor
+WorkingDirectory=/opt/predictor
+# All FORGE_SCORECARD_* env vars have safe defaults in forge/scoring.py
+# and tools/forge_scorecard.py themselves -- this unit must keep working
+# even if .env is missing/broken, same principle as predictor_backup.service.
+# EnvironmentFile is optional: if the operator has tuned thresholds in .env,
+# those override the code defaults; if .env doesn't exist, code defaults win.
+EnvironmentFile=-/opt/predictor/.env
+ExecStart=/opt/predictor/.venv/bin/python /opt/predictor/tools/forge_scorecard.py
+StandardOutput=append:/opt/predictor/logs/forge_scorecard.log
+StandardError=append:/opt/predictor/logs/forge_scorecard.log
+
+# Same hardening pattern as predictor_backup.service. The scorecard dump
+# lives OUTSIDE /opt/predictor by default (in /opt/predictor-forge-scorecard/)
+# so a wiped app directory doesn't take the operator-facing view with it.
+# install.sh creates and chowns /opt/predictor-forge-scorecard/ to the
+# app user before this unit ever runs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/predictor/logs /opt/predictor/forge_data /opt/predictor-forge-scorecard

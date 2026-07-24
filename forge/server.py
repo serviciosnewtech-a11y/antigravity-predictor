@@ -33,7 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel
 
-from forge import db
+from forge import db, scoring
 from forge.collector import LiveCollector
 from forge.simulator import StrategySimulator
 from forge.strategies import DEFAULT_STRATEGIES, Strategy
@@ -62,7 +62,16 @@ def on_candle(candle: dict):
 async def lifespan(app: FastAPI):
     db.init_db()
 
-    # Load default strategies
+    # Idempotent cleanup of any registry rows from previous runs whose ids
+    # were random (pre-canonical-id fix). Safe to re-run on every startup:
+    # on a DB that's already clean this is a no-op. See db.cleanup_registry
+    # docstring for what it actually rewrites.
+    known = {s.id: s.to_dict() for s in DEFAULT_STRATEGIES}
+    cleanup_report = db.cleanup_registry(known)
+    logger.info(f"[Forge] Registry cleanup: {cleanup_report}")
+
+    # Load default strategies (upsert_strategy inside StrategySimulator writes
+    # the canonical rows).
     for s in DEFAULT_STRATEGIES:
         simulators.append(StrategySimulator(s))
     logger.success(f"[Forge] {len(simulators)} strategies loaded.")
@@ -166,12 +175,81 @@ def add_strategy(req: StrategyRequest):
 
 @app.delete("/strategies/{strategy_id}")
 def remove_strategy(strategy_id: str):
+    """Deactivate a strategy: stops paper-trading + writes active=0 to the
+    registry so state doesn't silently diverge between server memory and DB
+    on the next restart (pre-fix: only in-memory simulators list was
+    filtered, registry still said active=1)."""
     global simulators
     before = len(simulators)
     simulators = [s for s in simulators if s.s.id != strategy_id]
     if len(simulators) == before:
         raise HTTPException(404, f"Strategy {strategy_id} not found")
+    # Reflect the deactivation in strategy_registry too.
+    with db._lock, db._conn() as c:
+        c.execute("UPDATE strategy_registry SET active = 0 WHERE id = ?", (strategy_id,))
     return {"removed": strategy_id}
+
+
+# ── Recommendations (scorecard) ───────────────────────────────────────────────
+
+@app.get("/recommendations")
+def recommendations():
+    """Current per-strategy verdict from strategy_scorecard.
+
+    Populated by tools/forge_scorecard.py running on forge_scorecard.timer.
+    Evidence only — applying a verdict requires an explicit
+    POST /recommendations/apply call.
+    """
+    rows = scoring.get_scorecard()
+    return {
+        "recommendations": rows,
+        "count":           len(rows),
+        "min_trades_gate": scoring.MIN_TRADES,
+    }
+
+
+@app.get("/recommendations/history/{strategy_id}")
+def recommendations_history(strategy_id: str, limit: int = 200):
+    """Full evaluation_history for one strategy, newest first.
+
+    Substrate for future trend-based verdicts ("declined for N consecutive
+    evaluations"). Also lets Luis eyeball the verdict trajectory by hand.
+    """
+    return {
+        "strategy_id": strategy_id,
+        "history":     scoring.get_evaluation_history(strategy_id, limit=limit),
+    }
+
+
+class ApplyRecommendationRequest(BaseModel):
+    strategy_id: str
+
+
+@app.post("/recommendations/apply")
+def apply_recommendation(req: ApplyRecommendationRequest):
+    """Human-approved application of a scorecard verdict.
+
+    Only VERDICT_LOSING actually mutates state today (sets active=0 in
+    strategy_registry AND removes from live simulators list). Other verdicts
+    return {"action": "no_op"} — evidence stays evidence.
+
+    Deliberately explicit / manual to match Forge's "NOTHING promotes
+    automatically" stance. If a future mode wants automated apply, add it
+    as an opt-in flag on this endpoint, not a background job.
+    """
+    try:
+        result = scoring.apply_recommendation(req.strategy_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    # If it actually deactivated, mirror that in the live simulators list so
+    # ticks stop being fanned out to it — otherwise the app dir and DB agree
+    # but the running process keeps paper-trading until next restart.
+    if result["action"] == "deactivated":
+        global simulators
+        simulators = [s for s in simulators if s.s.id != req.strategy_id]
+
+    return result
 
 
 @app.get("/leaderboard")

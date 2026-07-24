@@ -26,8 +26,11 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.9`, commit `6934b7b`.** This is what's
-actually deployed/being deployed on the live host as of this handoff.
+**Latest, current tag: `beta-1.10.15`.** Cut 2026-07-24 with the Forge
+scoring/scorecard work (§7.10). Prior tags `beta-1.10.10` through
+`beta-1.10.14` shipped in the same session batch (§7.6/§7.8). All older
+references in this doc to "beta-1.10.9 is latest" pre-date those and are
+stale — don't trust them, trust the git tag list.
 
 **Gotcha:** tag `beta-1.11` exists and sorts *after* `beta-1.10.9`
 alphanumerically, but it is chronologically **older** —
@@ -381,16 +384,211 @@ needs a fresh `install.sh` run (or at minimum: pull `src/predictor_server.py`
 + `tools/backup_signal_log.py`, restart `predictor.service`, and manually
 set up the backup timer/directory) from beta-1.10.14.
 
+## 7.9. Forge "improving loop" — discussion-only, 2026-07-24, NO CODE WRITTEN YET
+
+Luis opened this explicitly as discussion, not implementation: **"do not code
+it right away i have a couple of questions."** Everything in this section is
+agreed direction, not shipped work — the next session should implement it,
+not re-litigate it, unless new evidence changes the picture.
+
+**Context:** `forge/` (`server.py`, `db.py`, `simulator.py`, `strategies.py`,
+`collector.py`) is a separate paper-trading/comparison engine, philosophically
+consistent with the rest of the project (its own docstring: "NOTHING promotes
+automatically... pull results, compare, decide"). It runs 16 `StrategySimulator`
+instances concurrently in one process. It is currently **fully disconnected**
+from `retrain_all.sh` / the retraining pipeline — no shared data at all.
+
+**Ground-truth findings from this session (verified by reading the actual
+code, not assumed):**
+
+- **Not a memory/capacity problem.** `LiveCollector._history` is a bounded
+  `deque(maxlen=ATR_PERIOD + 5)` per symbol (`forge/collector.py`); each
+  `StrategySimulator` holds only its param set plus at most one open position.
+  16-18 of these in one process costs kilobytes, not megabytes. Luis's
+  original framing ("memory management for potentially 18 agents") does not
+  need architectural change on the memory side — flag this to him directly if
+  it resurfaces, the concern doesn't hold up against the actual code.
+- **Logging is already durable, not memory-buffered.** `forge/db.py`:
+  `insert_candle()`, `open_trade()`, `close_trade()` all commit immediately
+  inside `with _lock, _conn() as c:` blocks. `trades` already logs strategy_id,
+  symbol, direction, entry/exit price, pnl_pct, exit_reason, candles_held per
+  closed position. `candles` already logs raw model output per tick
+  (long_prob, short_prob, atr, trend), pruned to last 5000 rows/symbol. **The
+  "log it" half of Luis's ask is essentially already solved.**
+- **Real, confirmed bug: `strategy_registry` has no stable identity across
+  restarts.** `forge/strategies.py`: `Strategy.id` is
+  `field(default_factory=lambda: uuid.uuid4().hex[:8])` — a fresh random ID
+  every time the process (re)starts, not loaded or derived deterministically.
+  `db.upsert_strategy()` does `INSERT OR REPLACE ... VALUES (:id, ...)`, so a
+  new ID means a new row, not an update. Live `forge_data/forge.db` observed
+  with 144 `strategy_registry` rows for what should be 16 strategies (16 ×
+  ~9 restarts). **This must be fixed before any scoring step means anything**
+  — otherwise a strategy's history fragments across every restart. Fix
+  direction agreed but not written: derive `id` deterministically from
+  `name + symbol + direction + params`, or have startup look up existing
+  registry rows by name instead of blindly inserting fresh ones.
+- **What's actually missing is a *comparison* step, not more logging.**
+  Nothing in the codebase currently reads `trades`/`candles` and produces a
+  verdict — Forge's own stated philosophy ("pull results, compare, decide")
+  has no code behind the "compare" part yet.
+
+**Luis's stated constraint, important for how this gets built:** he set out
+gathering this data to be analyzed but says plainly "I know little to
+nothing about crypto so often times I don't know what number means, I just
+know it goes there." **This is a hard design requirement, not a nice-to-
+have:** the comparison step must not just surface raw numbers (win rate,
+avg pnl_pct) for Luis to interpret — it needs to output a plain-language
+verdict per strategy he can act on without crypto expertise.
+
+**Agreed direction (discussion-stage, ready to scope into real work next
+session):**
+
+1. Fix the `Strategy.id` stability bug first (above) — a scorecard built on
+   fragmented history is worse than no scorecard.
+2. Add one small, scheduled scoring job — same pattern as
+   `predictor_backup.service`/`.timer` (§7.8): no LLM, no autonomy, pure
+   arithmetic over already-durable SQLite rows, on a timer.
+3. The job groups `trades` by `strategy_id`, computes win rate / average
+   pnl_pct / sample size, and — critically — applies a **minimum sample size
+   gate before rendering any verdict** (e.g. ~30 closed trades) so 3 lucky
+   trades can't produce a false "this strategy is great" signal. Below the
+   threshold: explicit "not enough data yet," not a hidden/absent row.
+4. Above the threshold, output a plain label per strategy, not raw stats:
+   e.g. "profitable, keep running" / "losing money, consider disabling" /
+   "not enough trades yet." Luis should be able to read the output and act
+   without knowing what any underlying number means.
+5. **Open, unresolved question — needs Luis's decision before implementing:**
+   should the scoring job be allowed to auto-flip a losing strategy's
+   `active` flag to 0 in `strategy_registry` (stops it from paper-trading
+   further, fully reversible, nothing "live" touched), or should it only
+   ever report and leave every state change to Luis by hand? Leaning toward
+   "report only" to match the project's consistent "advisory only, nothing
+   promotes/executes automatically" stance elsewhere, but this wasn't
+   explicitly confirmed — ask before writing it either way.
+
+**Separately flagged, smaller scope, not yet needed:** if a future goal is
+comparing *model retrains* through Forge (not just strategy param variants),
+that needs a new `model_version` field somewhere in the logging path — no
+such concept exists in the schema today. Distinct, later piece of work, not
+part of the 16-strategy scorecard above.
+
+## 7.10. Forge improving loop — implemented in beta-1.10.15, 2026-07-24
+
+Followed §7.9's agreed direction after one round of design pushback from
+Luis, then shipped. Everything below is what actually landed, not what was
+discussed. Full 85-test suite green.
+
+**Design decisions Luis's rebuttal changed vs. the initial audit:**
+- Strategy.id is **not** `self.name` — it's `uuid5(FORGE_STRATEGY_NAMESPACE,
+  canonical(symbol + direction + sorted params))[:12]`. Cosmetic rename of
+  the display name (`"EMA Cross"` → `"EMA Cross v2"`) does NOT create a new
+  identity; a real param change DOES. Fixed namespace UUID + a
+  `STRATEGY_ID_SCHEMA_VERSION` baked into the canonical string protect
+  against future identity-fields-set drift.
+- Migration is idempotent with a printable report (no silent deletes):
+  remaps `trades.strategy_id` by `strategy_name` for anything not on a
+  canonical id, deletes non-canonical `strategy_registry` rows, scrubs any
+  stale `id` inside `params` JSON. Orphan trades from removed strategies
+  are left in place, not silently deleted. Verified against a synthetic
+  144-row registry — collapses to 16, second run is a no-op.
+- Scoring is a **monolith** (`forge/scoring.py`), one file, three sections:
+  metrics / evaluators / recommendations. Splits into three modules the
+  moment a second evaluator (Bayesian, drift detection, ML ranking) shows
+  up — section boundaries in the file map 1:1 to that future split.
+- Full metric set: `trade_count`, `win_rate_pct`, `expectancy_pct`,
+  `profit_factor`, `avg_R`, `max_drawdown_pct`, `max_consec_losses`,
+  `avg_candles_held`, `total_pnl_pct`. All persisted. All computed
+  underneath the plain-language verdict.
+- Four v1 verdict labels — nothing trend-based yet (needs
+  `evaluation_history` depth to compute against, which won't exist until
+  v2 has run for a while):
+  * `not_enough_data` (below MIN_TRADES=50)
+  * `healthy` (all-of: PF ≥ 1.3, expectancy > 0, DD < 15%, streak < 10)
+  * `losing_money_consider_disabling` (any-of: PF < 1.0, total pnl < -3%,
+    DD > 25%)
+  * `inconclusive` (sample met, neither branch triggered)
+- Losing check runs BEFORE healthy check — a high-WR strategy with tiny
+  wins vs big losses (net negative) must flag losing, not healthy.
+- All thresholds env-overridable via `FORGE_SCORECARD_MIN_TRADES` /
+  `FORGE_SCORECARD_HEALTHY_PF` / `FORGE_SCORECARD_HEALTHY_MAX_DD` /
+  `FORGE_SCORECARD_HEALTHY_MAX_CONSEC_LOSS` / `FORGE_SCORECARD_LOSING_PF`
+  / `FORGE_SCORECARD_LOSING_TOTAL_PNL` / `FORGE_SCORECARD_LOSING_MAX_DD`.
+  Defaults calibrated for 15-minute scalping (higher noise ratio → 50-trade
+  gate vs. §7.9's initial 30, tighter DD tolerance, PF ≥ 1.3 as the
+  "actually edge, not noise" line).
+- **Report-only** on the write side. `POST /recommendations/apply` is a
+  separate human-approved endpoint — same pattern as every other engine in
+  the project. Applying a healthy verdict is a no-op; applying a losing
+  verdict sets `active=0` in `strategy_registry` AND removes from the
+  live `simulators` list so it stops paper-trading without waiting for a
+  restart. Recommendation stays advisory in the write direction; the
+  operator clicks once to apply.
+- **Nullable `model_version` + `strategy_version`** columns added to
+  `candles` and `trades` now, while the schema is young. Zero behavior
+  change today; saves a future migration when `retrain_all.sh` learns to
+  emit a manifest.
+
+**Additional real bugs found + fixed same PR (both flagged during audit,
+worth doing while everything was open):**
+- `forge/server.py` `remove_strategy` used to only filter the in-memory
+  `simulators` list — `strategy_registry.active` stayed 1, so state
+  silently diverged. Now writes `active = 0` too.
+- SQLite `journal_mode=WAL` + `synchronous=NORMAL` set on every connection
+  — the scorecard's aggregate reader was going to serialize against the
+  candle-insert writer under default DELETE/FULL. Confirmed live: WAL is
+  persistent in the file header; `synchronous` is per-connection, set in
+  `_conn()`, verified by regression test.
+
+**Files shipped:**
+- Modified: `forge/strategies.py` (canonical id), `forge/db.py` (WAL +
+  schema + `cleanup_registry`), `forge/server.py` (lifespan cleanup, three
+  new routes, `remove_strategy` DB fix), `deploy/bare-metal/install.sh`
+  (scorecard timer + directory creation).
+- New: `forge/scoring.py`, `tools/forge_scorecard.py`,
+  `deploy/bare-metal/forge_scorecard.service`,
+  `deploy/bare-metal/forge_scorecard.timer`,
+  4 test files (25 new tests, all pass; full 85-test suite green).
+
+**Not yet applied to any host as of tag time.** Fresh `install.sh` from
+beta-1.10.15 gets everything at once. The registry cleanup runs on every
+Forge startup — safe on a clean DB (no-op), collapses the fragmented
+144-row registry to 16 canonical rows on a host that carried the pre-fix
+state forward.
+
+**Deliberately deferred to v2** (not in beta-1.10.15):
+- Trend-based verdicts (`recovering`, `degrading`, `unstable`) — need
+  `evaluation_history` to accumulate real depth first.
+- Splitting `scoring.py` into three modules — do it the moment a second
+  evaluator appears; splitting now is layering for its own sake.
+- Reading strategies from `strategy_registry` on startup instead of always
+  from `DEFAULT_STRATEGIES` — orthogonal to this work; the registry is now
+  actually useful (canonical ids, current scorecard, evaluation history)
+  but the code path that reads it back at startup is future work.
+
 ## 8. How to pick this back up
 
-1. Confirm what state the live host is actually in — don't assume
-   beta-1.10.9 is deployed just because it's the latest packaged tag; check
-   `git -C /opt/predictor rev-parse HEAD` (or equivalent) on the live host
-   against `6934b7b`.
-2. If the live `/api/chat` relay is still pointed at anything other than the
-   isolated `/opt/predictor-metis` install, that's the highest-priority
-   open item (§4, task #65).
-3. Check the live `.env` for a stray `AGENT_RELAY_TIMEOUT_S=10` (§4).
-4. Anything new gets the full treatment from §5 — tag, package, verify by
+1. **Latest tag is `beta-1.10.15`** as of this writing — Forge improving
+   loop (§7.10). Ignore the older references in this doc to "latest is
+   1.10.9" — those pre-date §7.6 through §7.10. Ignore `beta-1.11` (see §2
+   for the numbering trap).
+2. Confirm what state the live host is actually in — don't assume the
+   latest tag is deployed just because it's tagged. `git -C /opt/predictor
+   rev-parse HEAD` on the live host against `beta-1.10.15`.
+3. If the live `/api/chat` relay is still pointed at anything other than
+   the isolated `/opt/predictor-metis` install, that's the next open item
+   (§4, task #65).
+4. Check the live `.env` for a stray `AGENT_RELAY_TIMEOUT_S=10` (§4).
+5. beta-1.10.12/1.10.13/1.10.14/1.10.15 (loopback bind + firewall, nginx
+   basic auth, data backup + candle history depth, Forge scoring loop —
+   §7.6/§7.8/§7.10) are shipped/packaged but **not yet applied to the
+   rehearsal host** as of this writing — a fresh `install.sh` run from
+   beta-1.10.15 gets all of it at once.
+6. Watch the first live scorecard runs on the rehearsal host once real
+   trades accumulate — the 50-trade gate is a first-guess default. If most
+   strategies stay at `not_enough_data` for longer than expected, either
+   lower `FORGE_SCORECARD_MIN_TRADES` in `.env` or wait. If everything
+   flags `losing` on real data, the threshold constants are wrong for
+   this signal density — tune via env vars, don't re-code.
+7. Anything new gets the full treatment from §5 — tag, package, verify by
    execution, archive, README entry. Don't skip steps under time pressure;
    that's exactly how the `beta-1.11` numbering trap in §2 happened.

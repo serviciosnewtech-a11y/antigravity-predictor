@@ -1,0 +1,16 @@
+[Unit]
+Description=Run Forge scorecard evaluation pass periodically
+Requires=forge_scorecard.service
+
+[Timer]
+# 10-minute delay after boot so predictor / forge services stabilize first,
+# then hourly. Verdicts only change when new trades close; 1h is plenty
+# against a 15-minute candle cadence and 50-trade min-sample gate. Longer
+# would delay a losing strategy's flag; shorter is wasted work.
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

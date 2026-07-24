@@ -218,8 +218,21 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
     "$APP_DIR/deploy/bare-metal/predictor_backup.service" > /etc/systemd/system/predictor_backup.service
 cp "$APP_DIR/deploy/bare-metal/predictor_backup.timer" /etc/systemd/system/predictor_backup.timer
 
+# forge_scorecard -- periodic evaluation pass over Forge trade history.
+# Reads forge_data/forge.db, writes strategy_scorecard + evaluation_history,
+# dumps a plain-language text summary to a directory OUTSIDE $APP_DIR (same
+# principle as $BACKUP_DIR above: the operator-facing view should survive a
+# wipe of the app dir). See forge/scoring.py + tools/forge_scorecard.py for
+# the metric set, verdict thresholds, and env-var overrides.
+FORGE_SCORECARD_DIR="$(dirname "$APP_DIR")/$(basename "$APP_DIR")-forge-scorecard"
+mkdir -p "$FORGE_SCORECARD_DIR"
+chown "$APP_USER:$APP_USER" "$FORGE_SCORECARD_DIR"
+sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
+    "$APP_DIR/deploy/bare-metal/forge_scorecard.service" > /etc/systemd/system/forge_scorecard.service
+cp "$APP_DIR/deploy/bare-metal/forge_scorecard.timer" /etc/systemd/system/forge_scorecard.timer
+
 systemctl daemon-reload
-systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer
+systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer forge_scorecard.timer
 log "Services enabled."
 
 # ── Basic auth ────────────────────────────────────────────────────────────────
@@ -293,10 +306,11 @@ sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" "$APP_DIR/src/fetch_macro.py" \
     log "WARN: initial macro fetch failed — run manually before retraining."
 
 # ── Start services ────────────────────────────────────────────────────────────
-log "Starting predictor, macro timer, backup timer, and agent relay…"
+log "Starting predictor, macro timer, backup timer, forge scorecard timer, and agent relay…"
 systemctl start predictor
 systemctl start macro_refresh.timer
 systemctl start predictor_backup.timer
+systemctl start forge_scorecard.timer
 # Always started — degrades gracefully (see agent_relay.service comment
 # above) rather than crashing if AGENT_RELAY_CMD's binary isn't installed.
 systemctl start agent_relay
@@ -358,4 +372,11 @@ log " Data backup: signal_history.db backed up every 6h to $BACKUP_DIR"
 log "              (deliberately outside $APP_DIR — survives a bad reinstall"
 log "              or a wipe of the app directory). Run once now:"
 log "                sudo -u $APP_USER $APP_DIR/.venv/bin/python $APP_DIR/tools/backup_signal_log.py"
+log ""
+log " Forge scorecard: strategy verdicts computed hourly, dumped to"
+log "                  $FORGE_SCORECARD_DIR/scorecard.txt"
+log "                  (also outside $APP_DIR). Run once now:"
+log "                    sudo -u $APP_USER $APP_DIR/.venv/bin/python $APP_DIR/tools/forge_scorecard.py"
+log "                  Then: cat $FORGE_SCORECARD_DIR/scorecard.txt"
+log "                  API:  curl http://127.0.0.1:18912/recommendations"
 log "======================================================"
