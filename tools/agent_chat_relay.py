@@ -41,8 +41,20 @@ Configuration (env vars, all optional):
                                it is replaced with the flattened, shell-
                                quoted conversation text before execution.
                                Default: 'hermes --profile metis chat -q {prompt}'
-                               (preserves this relay's original Hermes/Metis
-                               behavior with zero config changes needed).
+                               (inherited from this relay's original Hermes/
+                               Metis-specific predecessor, tools/metis_chat_
+                               relay.py -- NOT a verified-working value on
+                               any given host. "--profile metis" only works
+                               if a Hermes CLI profile literally named
+                               "metis" already exists there; on a fresh host
+                               it usually doesn't, and this fails exactly
+                               like any other unset config -- confirmed live
+                               2026-07-23 (see deploy/bare-metal/
+                               LIVE_DEPLOY_NOTES.md #7). Always verify
+                               AGENT_RELAY_CMD by hand (run the exact command
+                               with a real prompt, outside this relay,
+                               before trusting it in .env) rather than
+                               assuming the default already works.
                                Examples:
                                  AGENT_RELAY_CMD='hermes --profile ops chat -q {prompt}'
                                  AGENT_RELAY_CMD='mycli --agent trader ask {prompt}'

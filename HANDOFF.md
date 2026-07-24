@@ -115,6 +115,22 @@ read/write memory. If the live `agent_relay.service`'s `AGENT_RELAY_CMD`
 still points at anything other than the isolated `/opt/predictor-metis`
 install, that's the first thing to check and fix.
 
+**Update, confirmed live 2026-07-23 (same day, later in the day):** the live
+host's `AGENT_RELAY_CMD` was still on the shipped fallback default,
+`hermes --profile metis chat -q {prompt}` — never actually a verified value
+on any host, just an unfixed leftover from an older predecessor tool (full
+story: `deploy/bare-metal/LIVE_DEPLOY_NOTES.md` #7, added this same session
+after this exact failure was reported). `/health` fails because no Hermes
+CLI profile named `metis` exists on that host; `/api/chat` returns 503.
+Fixed the misleading docs/examples (`.env.example`, `install.sh`,
+`tools/agent_chat_relay.py`'s docstring, this file's own §6 example) so they
+no longer present that string as a verified "Correct:" value. **Still
+needs doing on the live host itself:** find the real working invocation
+(most likely `hermes -z "<prompt>"` against the `/opt/predictor-metis`
+install, absolute path, per LIVE_DEPLOY_NOTES.md #7's fix steps), verify it
+by hand first, then set it in `.env`, restart `agent_relay`, recheck
+`/health` → `/api/chat/status` → a real `/api/chat` call.
+
 **Also still open:** whether the relay timeout that was originally observed
 at a hard "10.0s" was `AGENT_RELAY_TIMEOUT_S` explicitly set to 10 somewhere
 in the live `.env` (worth reverting to the 120s default now that warm-up

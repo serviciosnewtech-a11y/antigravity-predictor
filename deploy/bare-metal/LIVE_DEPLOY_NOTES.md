@@ -123,9 +123,58 @@ elsewhere in the template that still encloses the placeholder), so the rule
 of thumb is: **never put quotes around `{prompt}` in the template at all.**
 
 ```
-Correct: AGENT_RELAY_CMD=/path/to/binary --profile metis chat -q {prompt}
-Wrong:   AGENT_RELAY_CMD=/bin/echo "[reply] {prompt}"
+Template shape: AGENT_RELAY_CMD=/path/to/binary --some-flag {prompt}
+Wrong:          AGENT_RELAY_CMD=/bin/echo "[reply] {prompt}"
 ```
+(An earlier version of this file used `--profile metis chat -q {prompt}` as
+the "Correct" example here. Don't copy that verbatim — see #7 below for why.)
+
+## 7. The shipped default/example (`--profile metis`) was never actually verified
+
+Symptom (found live, 2026-07-23, a separate incident from #1-6 above — this
+one hit a *later* session that had already worked through the plumbing
+chain): relay is up and reachable, but `/health` reports failure because
+invoking `hermes --profile metis chat -q {prompt}` errors out — that
+profile doesn't exist on this host. `/api/chat` returns 503.
+
+Cause: `hermes --profile metis chat -q {prompt}` is `tools/
+agent_chat_relay.py`'s blank-`.env` fallback default (`_DEFAULT_CMD`), and
+it was also used as the "Correct:" example in this file's own §6 above, and
+in `.env.example`/`install.sh`'s embedded template. **None of those were
+ever a verified-working value on any real host.** It's inherited unchanged
+from an older, Hermes/Metis-specific predecessor of this relay (`tools/
+metis_chat_relay.py`, since replaced) that assumed a Hermes CLI profile
+literally named `metis` would already exist wherever this ran. The isolated
+Hermes install actually built and verified live earlier this project (a
+separate installation directory, invoked with the CLI's own one-shot flag —
+see whatever session's HANDOFF.md is current for the exact path, since it
+can change) is a *different* isolation mechanism than Hermes's built-in
+`--profile` flag, and nobody had gone back to update this default/example
+to match once that was the mechanism that actually got proven out. A fresh
+session copying the "Correct:" example verbatim, reasonably trusting a file
+that says "Correct," hit exactly this.
+
+Fix: there is no universal correct value to hardcode here — it depends on
+how the CLI agent is actually installed/isolated on this specific host, and
+that can legitimately change between hosts/sessions. Before setting
+`AGENT_RELAY_CMD` in `.env`:
+1. Find the real, working invocation by running it directly, by hand, with
+   a real (non-trivial) prompt — not just a "ping" — as whichever user
+   `agent_relay.service` runs as (`predictor`). If it's a Hermes CLI
+   install, `hermes -z "<a real question>"` is the documented "purest
+   one-shot" entry point (no TTY/interactive-layer requirements) — try that
+   before reaching for `--profile`, unless a specific profile is known to
+   already exist (`hermes profile list` or equivalent, if that subcommand
+   exists on the installed version).
+2. Get the absolute path to that binary (`command -v hermes` run as that
+   same user) — see #4 above for why a bare name won't work under systemd.
+3. Only once that exact command has been proven to work standalone, put it
+   in `.env`'s `AGENT_RELAY_CMD`, `daemon-reload`, restart `agent_relay`,
+   and re-check `/health` before assuming `/api/chat` will work.
+
+This file's own §6 "Correct:" example has been corrected to a generic
+template shape rather than a specific untested value, to stop this from
+happening a third time.
 
 ## What we actually did, this incident
 

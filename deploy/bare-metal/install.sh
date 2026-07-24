@@ -112,7 +112,7 @@ ANTHROPIC_CHAT_MODEL=
 # /opt/predictor/tools/agent_chat_relay.py` and curl its /health before
 # trusting agent_relay.service to be doing anything useful.
 #
-# Two real gotchas found during a live deploy, see
+# Three real gotchas found during live deploys, see
 # deploy/bare-metal/LIVE_DEPLOY_NOTES.md for the full story:
 #  1. Use an ABSOLUTE PATH to the agent binary, not a bare command name --
 #     systemd services don't inherit an interactive shell's PATH, so
@@ -122,7 +122,12 @@ ANTHROPIC_CHAT_MODEL=
 #     it safely; nesting breaks the moment a real prompt contains an
 #     embedded quote character, which it will (health-check probes are
 #     quote-free and pass fine, hiding this until a real chat request).
-#     Correct: AGENT_RELAY_CMD=/path/to/binary --profile metis chat -q {prompt}
+#     Template shape:  AGENT_RELAY_CMD=/path/to/binary --some-flag {prompt}
+#  3. "--profile <name>" only works if that Hermes CLI profile already
+#     exists on THIS host -- don't copy the "metis" example verbatim and
+#     assume it works. Confirmed broken on a live host 2026-07-23 (see
+#     LIVE_DEPLOY_NOTES.md #7): always run the exact AGENT_RELAY_CMD by hand
+#     with a real prompt first, then set it here once it's proven to work.
 HERMES_PROXY_URL=http://127.0.0.1:8645
 HERMES_INFERENCE_MODEL=
 AGENT_RELAY_CMD=
