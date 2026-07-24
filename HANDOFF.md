@@ -355,6 +355,32 @@ CDP connection (`127.0.0.1:9222`) restored — that's Hermes-side tooling,
 not something fixable from this session. Everything backend-testable is
 confirmed healthy in the meantime.
 
+## 7.8. Data preservation + chart history depth — beta-1.10.14
+
+From the live dashboard screenshot the user shared: "we need to preserve
+data at all costs" and "we only have like 1 day or less" of chart history.
+Both were real, found and fixed:
+
+- `signal_history.db` was restart-safe but not accident-safe -- a single
+  copy inside `/opt/predictor`, gone the moment that directory is wiped,
+  reinstalled, or (what actually happened) simply not present on a fresh
+  rehearsal host with no migration path from wherever the old data was.
+  New `tools/backup_signal_log.py` + `predictor_backup.service`/`.timer`:
+  safe SQLite-backup-API snapshots every 6h to `/opt/predictor-backups`
+  (outside the app dir on purpose), with retention pruning. This is
+  local-disk redundancy against reinstall/wipe accidents only -- NOT
+  off-host backup against losing the whole disk/host. That's real,
+  separate work, still undecided, not solved by this.
+- The dashboard's default (15m) chart view was capped at ~1.5 days of
+  history on every fresh start because `AssetEngine.fetch_initial_candles()`
+  hardcoded a 150-candle Bybit request. Bumped to 1000 (Bybit's own
+  per-request max), ~10.4 days now.
+
+Neither has been applied to the rehearsal host yet as of this writing --
+needs a fresh `install.sh` run (or at minimum: pull `src/predictor_server.py`
++ `tools/backup_signal_log.py`, restart `predictor.service`, and manually
+set up the backup timer/directory) from beta-1.10.14.
+
 ## 8. How to pick this back up
 
 1. Confirm what state the live host is actually in — don't assume
