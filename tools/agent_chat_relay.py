@@ -84,6 +84,34 @@ Configuration (env vars, all optional):
                                Default: 120.
     AGENT_RELAY_HISTORY_TURNS  How many trailing messages to fold into the
                                flattened prompt. Default: 8.
+    AGENT_RELAY_WARMUP_TIMEOUT_S
+                               Budget (seconds) for a ONE-TIME warm-up call
+                               made at process startup, before the server
+                               starts accepting connections. Default: 60.
+                               Why this exists: found live 2026-07-23 that a
+                               real CLI agent's first invocation after a
+                               fresh process/session start can carry real
+                               one-time cold-start cost (model load, provider
+                               handshake, session init) — one measured case
+                               took ~15s on the first call, comfortably under
+                               a second on every call after. Baking that cost
+                               into a startup warm-up means real user
+                               requests never pay it, and the per-request
+                               AGENT_RELAY_TIMEOUT_S can stay tight enough to
+                               fail fast on a genuinely broken backend
+                               instead of being stretched to cover a cold
+                               start that only ever happens once per process
+                               lifetime. A failed/slow warm-up logs a
+                               warning but never blocks the server from
+                               starting — /health will just accurately
+                               report the agent as not-yet-verified until a
+                               real call succeeds.
+    AGENT_RELAY_SKIP_WARMUP    Set to "true" to skip the startup warm-up call
+                               entirely — useful for fast/trivial
+                               AGENT_RELAY_CMD values (e.g. a stub command
+                               used for interface testing) where cold-start
+                               latency isn't a real concern and there's no
+                               reason to add startup delay. Default: false.
 
 Run standalone:
     python3 tools/agent_chat_relay.py
@@ -113,6 +141,8 @@ COMMAND_TIMEOUT_S = float(os.environ.get("AGENT_RELAY_TIMEOUT_S", "120"))
 HISTORY_TURNS = int(os.environ.get("AGENT_RELAY_HISTORY_TURNS", "8"))
 HEALTHCHECK_TIMEOUT_S = float(os.environ.get("AGENT_RELAY_HEALTHCHECK_TIMEOUT_S", "10"))
 HEALTHCHECK_CACHE_S = float(os.environ.get("AGENT_RELAY_HEALTHCHECK_CACHE_S", "20"))
+WARMUP_TIMEOUT_S = float(os.environ.get("AGENT_RELAY_WARMUP_TIMEOUT_S", "60"))
+SKIP_WARMUP = os.environ.get("AGENT_RELAY_SKIP_WARMUP", "false").strip().lower() == "true"
 
 # Cache for the real test-invocation health check (see _live_healthcheck) —
 # module-level, deliberately simple (single dict, no locking) since the
@@ -354,12 +384,39 @@ def main() -> int:
         f"[agent_relay] Starting on {RELAY_HOST}:{RELAY_PORT} — "
         f"cmd={AGENT_CMD!r} timeout={COMMAND_TIMEOUT_S}s"
     )
-    if not (shutil.which(binary) or os.path.exists(binary)):
+    binary_exists = shutil.which(binary) or os.path.exists(binary)
+    if not binary_exists:
         print(
             f"[agent_relay] WARNING: {binary!r} (first token of AGENT_RELAY_CMD) not found "
             f"on PATH or as a file. Requests will fail until AGENT_RELAY_CMD points at a "
             f"real, runnable agent."
         )
+
+    # One-time startup warm-up — absorbs whatever one-time cold-start cost
+    # the real agent has (model load, provider handshake, session init) so
+    # real user requests never pay it. See AGENT_RELAY_WARMUP_TIMEOUT_S's
+    # docstring above for the live incident this fixes. A failed/slow
+    # warm-up is logged but never blocks startup — the server still starts
+    # and /health will accurately report the agent's real state.
+    if binary_exists and not SKIP_WARMUP:
+        print(f"[agent_relay] Running startup warm-up call (budget: {WARMUP_TIMEOUT_S}s)…")
+        warmup_start = time.time()
+        ok, detail = _invoke_agent("(warm-up — this is a startup check, not a real message; a brief acknowledgement is fine)", timeout_s=WARMUP_TIMEOUT_S)
+        elapsed = time.time() - warmup_start
+        if ok:
+            print(f"[agent_relay] Warm-up succeeded in {elapsed:.1f}s — real requests should be fast from here.")
+            _health_cache["ts"] = time.time()
+            _health_cache["ok"] = True
+            _health_cache["detail"] = "ok"
+        else:
+            print(
+                f"[agent_relay] WARNING: warm-up call did not succeed after {elapsed:.1f}s "
+                f"({detail}) — starting anyway; the first real request may be slow or may "
+                f"fail if the underlying issue persists. /health will reflect real status."
+            )
+    elif SKIP_WARMUP:
+        print("[agent_relay] Startup warm-up skipped (AGENT_RELAY_SKIP_WARMUP=true).")
+
     server = ThreadingHTTPServer((RELAY_HOST, RELAY_PORT), _Handler)
     try:
         server.serve_forever()
