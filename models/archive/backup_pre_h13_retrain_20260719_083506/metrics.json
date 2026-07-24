@@ -1,0 +1,10 @@
+{
+  "best_iteration": 70,
+  "positives": 1827,
+  "rows": 16061,
+  "scale_pos_weight": 1.0,
+  "test_auc": 0.6397671832570304,
+  "test_logloss": 0.33971533150202743,
+  "valid_auc": 0.6375999799727128,
+  "valid_logloss": 0.35273599231253644
+}

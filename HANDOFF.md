@@ -26,13 +26,14 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.19`.** Cut 2026-07-24 — sidebar scroll
-discoverability (§7.14). Recent chain: beta-1.10.17 (chart history
-bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13). Prior tags in this batch: beta-1.10.10 through
-beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10 forge scoring loop),
-beta-1.10.16 (§7.11 housekeeping bundle). All older references in this
-doc to "beta-1.10.9 is latest" pre-date those and are stale — don't
-trust them, trust the git tag list.
+**Latest, current tag: `beta-1.10.20`.** Cut 2026-07-24 — repo
+housekeeping (§7.15). Recent chain: beta-1.10.17 (chart history
+bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13), beta-1.10.19
+(sidebar scroll discoverability, §7.14). Prior tags in this batch:
+beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10
+forge scoring loop), beta-1.10.16 (§7.11 housekeeping bundle). All
+older references in this doc to "beta-1.10.9 is latest" pre-date
+those and are stale — don't trust them, trust the git tag list.
 
 **Gotcha:** tag `beta-1.11` exists and sorts *after* `beta-1.10.9`
 alphanumerically, but it is chronologically **older** —
@@ -705,13 +706,100 @@ than one panel is below the fold), the next escalation is either
 capping `agent-report-card` height or moving the trade-log panel out
 of the sidebar entirely — flagged, not built.
 
+## 7.15. Repo housekeeping — beta-1.10.20, 2026-07-24
+
+Root-level session-artifact cleanup, guided by the ground-truth data map in
+`docs/DATA_INVENTORY.md` (which itself lands as the new companion doc to
+this file — read them side by side). No behavior change; no test change; no
+runtime code touched. Pure repo hygiene so future sessions aren't
+distracted by an accumulated pile of one-shot session notes and pre-retrain
+model snapshots.
+
+**Moved to `docs/archive/`** (content preserved verbatim under a new path,
+originals `git rm --cached`'d so they no longer show up as tracked at the
+root — see the FUSE-mount note below for why not `git mv`):
+- `RESCUE_HANDOFF.md`, `HERMES_HANDOFF.md`, `HARDENING_FOLLOWUP_TASKS.md`
+- `ANTIGRAVITY_PREDICTOR_BETA1_FULL_TECHNICAL_DOSSIER.md`, `DOSSIER.md`,
+  `DOSSIER_TECNICO.md`
+- `RUNTIME_FIX_LOG.md`, `SESSION_2026_07_18.md`, `SESSION_WAYPOINT.md`
+
+**Removed from tracking outright** (`git rm --cached`; not archived — these
+were one-shot session artifacts or fully-superseded install/deploy
+scratchpads with no ongoing reference value):
+- `INSTALL_DOSSIER_FOR_HERMES.md`, `TARGET_HERMES_DEPLOY_PROMPT.md`,
+  `DEPLOYMENT.md`, `DEPLOYMENT_LOG.md`, `CHANGES.md`
+- `FINISH_BETA_1_10_15.sh`, `FINISH_BETA_1_10_15_MSG.txt`,
+  `outputs_test.txt`
+- `src/_legacy/` (whole directory — zero references anywhere in the code
+  per the pre-cleanup audit)
+- `data/macro.hidden/` (five stale parquet files, zero references — the
+  live macro feed lives at `data/macro/`)
+- `docs/plans/BETA_1_1_LOGGING_IMPLEMENTATION_PLAN.md` (Luis flagged as
+  no-longer-relevant; kept `docs/reporting/*.md` untouched)
+
+**Moved to `models/archive/`** (same copy-then-cached-rm pattern):
+- `models/backup_pre_expand_20260719_164210/`
+- `models/backup_pre_h13_retrain_20260719_083506/`
+- `models/backup_pre_htf_history_expand_20260719_170000/`
+
+These are the ad-hoc pre-retrain safety snapshots called out as
+`ephemeral` in DATA_INVENTORY row 13/16 — they served their purpose during
+the July 19 H-13 remediation and no live path references them.
+
+**FUSE-mount constraint (why `git mv` wasn't used).** The repo is mounted
+in the Cowork session with `unlink(2)` denied at the mount layer. That
+breaks git's atomic-rename pattern for ref updates AND for `git mv` (which
+does source-unlink after destination-write). The workaround, proven across
+beta-1.10.17/18/19: stage against an alt index via `GIT_INDEX_FILE`, write
+the tree with `git write-tree`, commit via `git commit-tree`, direct-write
+`.git/refs/heads/main`, cut the annotated tag via `git mktag` +
+direct-write to `.git/refs/tags/<tag>`. For file moves: `cp <src>
+docs/archive/`, then `GIT_INDEX_FILE=/tmp/idxNN git rm --cached <src>`
+(index-only removal, working tree untouched).
+
+**Working-tree orphans (Luis follow-up).** Because `git rm --cached` and
+the copy-not-rename pattern both deliberately leave working-tree files
+alone, after this tag ships the working tree contains untracked orphan
+copies of every file that was moved or removed. That does not affect what
+lives in the tag itself (the git tree at `beta-1.10.20` is clean) and
+subsequent tags stage against fresh alt indexes that only touch specific
+files, so orphans can't leak back into a future tag by accident. Luis will
+physically delete them from his shell (which is not FUSE-mount-restricted)
+outside the git ceremony.
+
+Physical-delete list for Luis:
+```
+# from repo root:
+rm -f RESCUE_HANDOFF.md HERMES_HANDOFF.md HARDENING_FOLLOWUP_TASKS.md \
+      ANTIGRAVITY_PREDICTOR_BETA1_FULL_TECHNICAL_DOSSIER.md DOSSIER.md \
+      DOSSIER_TECNICO.md RUNTIME_FIX_LOG.md SESSION_2026_07_18.md \
+      SESSION_WAYPOINT.md INSTALL_DOSSIER_FOR_HERMES.md \
+      TARGET_HERMES_DEPLOY_PROMPT.md DEPLOYMENT.md DEPLOYMENT_LOG.md \
+      CHANGES.md FINISH_BETA_1_10_15.sh FINISH_BETA_1_10_15_MSG.txt \
+      outputs_test.txt
+rm -rf src/_legacy data/macro.hidden \
+       models/backup_pre_expand_20260719_164210 \
+       models/backup_pre_h13_retrain_20260719_083506 \
+       models/backup_pre_htf_history_expand_20260719_170000
+rm -f docs/plans/BETA_1_1_LOGGING_IMPLEMENTATION_PLAN.md
+```
+
+Nothing that lives at the archived new path (`docs/archive/*`,
+`models/archive/*`) should be deleted — those are the preserved copies.
+
+**Companion doc.** `docs/DATA_INVENTORY.md` (new this tag) is the anchor
+for every backup / off-host / restore decision in beta-1.10.21/22/23.
+Prefer that as the ground-truth data map going forward; this HANDOFF is
+still the running narrative, but the inventory is the point-in-time
+audit.
+
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.16`** as of this writing — housekeeping
-   bundle (§7.11) on top of the beta-1.10.15 Forge improving loop
-   (§7.10). Ignore the older references in this doc to "latest is
-   1.10.9" — those pre-date §7.6 through §7.11. Ignore `beta-1.11` (see
-   §2 for the numbering trap).
+1. **Latest tag is `beta-1.10.20`** as of this writing — repo
+   housekeeping (§7.15) on top of the beta-1.10.17/18/19 dashboard
+   micro-fixes (§7.12/§7.13/§7.14). Ignore the older references in
+   this doc to "latest is 1.10.9" — those pre-date §7.6 through §7.15.
+   Ignore `beta-1.11` (see §2 for the numbering trap).
 2. Confirm what state the live host is actually in — don't assume the
    latest tag is deployed just because it's tagged. `git -C /opt/predictor
    rev-parse HEAD` on the live host against `beta-1.10.16`.
