@@ -1,0 +1,12 @@
+[Unit]
+Description=Run predictor signal_history.db backup periodically
+Requires=predictor_backup.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

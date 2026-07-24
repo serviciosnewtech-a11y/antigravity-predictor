@@ -204,8 +204,22 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
 
 cp "$APP_DIR/deploy/bare-metal/macro_refresh.timer" /etc/systemd/system/macro_refresh.timer
 
+# predictor_backup — periodic durable backup of signal_history.db (the only
+# record of every signal/trade the predictor has ever produced) to a
+# directory OUTSIDE $APP_DIR, so it survives a bad reinstall, an accidental
+# `rm -rf` of the app dir, or standing up fresh on different hardware with
+# no path to bring old data along -- the exact incident that prompted this,
+# found live 2026-07-23. See tools/backup_signal_log.py's docstring for the
+# full reasoning and BACKUP_DIR/BACKUP_RETENTION_COUNT overrides.
+BACKUP_DIR="$(dirname "$APP_DIR")/$(basename "$APP_DIR")-backups"
+mkdir -p "$BACKUP_DIR"
+chown "$APP_USER:$APP_USER" "$BACKUP_DIR"
+sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
+    "$APP_DIR/deploy/bare-metal/predictor_backup.service" > /etc/systemd/system/predictor_backup.service
+cp "$APP_DIR/deploy/bare-metal/predictor_backup.timer" /etc/systemd/system/predictor_backup.timer
+
 systemctl daemon-reload
-systemctl enable predictor macro_refresh.timer signal_agent agent_relay
+systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer
 log "Services enabled."
 
 # ── Basic auth ────────────────────────────────────────────────────────────────
@@ -279,9 +293,10 @@ sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" "$APP_DIR/src/fetch_macro.py" \
     log "WARN: initial macro fetch failed — run manually before retraining."
 
 # ── Start services ────────────────────────────────────────────────────────────
-log "Starting predictor, macro timer, and agent relay…"
+log "Starting predictor, macro timer, backup timer, and agent relay…"
 systemctl start predictor
 systemctl start macro_refresh.timer
+systemctl start predictor_backup.timer
 # Always started — degrades gracefully (see agent_relay.service comment
 # above) rather than crashing if AGENT_RELAY_CMD's binary isn't installed.
 systemctl start agent_relay
@@ -338,4 +353,9 @@ log ""
 log " Before exposing this host publicly: point a domain at it and run"
 log "   certbot --nginx -d your.domain.com"
 log " to enable HTTPS — nginx.conf ships with plain HTTP only until then."
+log ""
+log " Data backup: signal_history.db backed up every 6h to $BACKUP_DIR"
+log "              (deliberately outside $APP_DIR — survives a bad reinstall"
+log "              or a wipe of the app directory). Run once now:"
+log "                sudo -u $APP_USER $APP_DIR/.venv/bin/python $APP_DIR/tools/backup_signal_log.py"
 log "======================================================"

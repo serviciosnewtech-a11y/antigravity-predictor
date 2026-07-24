@@ -547,7 +547,16 @@ class AssetEngine:
 
     def fetch_initial_candles(self):
         sym = self.symbol.replace("/", "")
-        url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval={TF_MINS}&limit=150"
+        # 1000 is Bybit's own per-request max for this endpoint (same cap
+        # fetch_display_candles() clamps to below) -- one request, no
+        # pagination needed. Used to be a hardcoded 150 (~1.5 days at 15m),
+        # which meant every fresh start/restart showed "we only have like a
+        # day of chart history" even though nothing was actually wrong --
+        # the engine's own in-memory candle buffer (what /api/candles
+        # serves for the model's native 15m timeframe) was just never asked
+        # for more than that. Found live 2026-07-23 on a freshly rehearsed
+        # install. 1000 candles at 15m is ~10.4 days.
+        url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval={TF_MINS}&limit=1000"
         try:
             r = requests.get(url, timeout=10)
             data = r.json()

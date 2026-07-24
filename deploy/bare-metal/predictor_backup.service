@@ -1,0 +1,26 @@
+[Unit]
+Description=Antigravity Predictor - signal_history.db durable backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=predictor
+WorkingDirectory=/opt/predictor
+# LOGS_DIR/BACKUP_DIR/BACKUP_RETENTION_COUNT all have safe defaults in
+# tools/backup_signal_log.py itself -- no .env dependency, this must keep
+# working even if .env is missing/broken (see LIVE_DEPLOY_NOTES.md #2 for
+# why that's a real, previously-seen failure mode, not hypothetical).
+ExecStart=/opt/predictor/.venv/bin/python /opt/predictor/tools/backup_signal_log.py
+StandardOutput=append:/opt/predictor/logs/backup.log
+StandardError=append:/opt/predictor/logs/backup.log
+
+# Same hardening pattern as predictor.service/agent_relay.service --
+# ProtectSystem=strict makes everything read-only except ReadWritePaths.
+# The backup DESTINATION is deliberately outside /opt/predictor (that's the
+# whole point -- see tools/backup_signal_log.py's docstring), so it has to
+# be listed explicitly here too, not just logs/. install.sh creates and
+# chowns /opt/predictor-backups to the app user before this unit ever runs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/predictor/logs /opt/predictor-backups
