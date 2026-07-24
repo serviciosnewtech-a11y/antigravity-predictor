@@ -1423,10 +1423,50 @@ def _call_llm_backend(system_ctx: str, message: str, history: List[_ChatMsg], cf
 @app.post("/api/chat")
 async def hermes_chat(req: _ChatRequest):
     """
-    Hermes signal-agent interactive chat.
-    Returns a context-aware reply from a configured real agent/LLM backend.
-    If no backend is reachable, returns 503 agent_unavailable; there is no
-    scripted success fallback.
+    Hermes signal-agent interactive chat. Thin async wrapper — the actual
+    work happens in _hermes_chat_sync(), run off the event loop via
+    asyncio.to_thread().
+
+    Why this indirection: _hermes_chat_sync() calls out to the configured
+    backend via llm_backend.py, which uses the synchronous `requests`
+    library (requests.post(..., timeout=60)) — a real, blocking network
+    call. Every backend tested during initial development (an echo stub,
+    a direct proxy call) replied in milliseconds, so calling that
+    synchronous code directly from this async def never visibly blocked
+    anything. Once a real agent was wired in — one that takes actual
+    seconds to think, not milliseconds — that same blocking call started
+    stalling uvicorn's entire event loop for the duration of every /api/chat
+    request. Found live: with the event loop stalled, this predictor
+    process's other concurrent async work (the dashboard's WebSocket
+    connection in particular) got starved, and the interleaving corruption
+    that produced surfaced as `h11._util.LocalProtocolError: Too much data
+    for declared Content-Length` — a transport-level symptom that looked
+    unrelated to this endpoint at first, reproduced only under real
+    concurrent load with a real (non-instant) backend, not under an
+    isolated single-request test with a fast stub. Confirmed by reproducing
+    predictor's exact /api/chat response shape (same Spanish-accented reply
+    text, same price_levels dict) under a real uvicorn server and finding
+    it could NOT be triggered by content/encoding alone -- ruling that out
+    left "the handler blocks the event loop" as the remaining explanation,
+    which matches every observed symptom (fine under fast stubs, breaks
+    under load with the first genuinely slow real backend).
+
+    asyncio.to_thread() runs the whole synchronous body (engine lock,
+    _live_system_context()'s own requests.get() calls, memory recall/
+    append, and the backend call) in a worker thread, freeing the event
+    loop to keep servicing other connections (WebSocket included) while
+    this request waits on a real agent to answer.
+    """
+    return await asyncio.to_thread(_hermes_chat_sync, req)
+
+
+def _hermes_chat_sync(req: _ChatRequest):
+    """
+    Synchronous body of /api/chat -- see hermes_chat()'s docstring for why
+    this is invoked via asyncio.to_thread() rather than being the route
+    handler directly. Returns a context-aware reply from a configured real
+    agent/LLM backend. If no backend is reachable, returns 503
+    agent_unavailable; there is no scripted success fallback.
     """
     sym = req.symbol if req.symbol in engines else "BTC/USDT"
     eng = engines[sym]
