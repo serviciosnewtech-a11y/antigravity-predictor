@@ -621,6 +621,35 @@ body.light-mode .tool-btn::after { background: rgba(240,242,247,0.98); }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
+/* Sidebar (right pane) gets a wider, more visible scrollbar because it
+   holds the whole set of panels (watchlist → agent report → trade log →
+   scorecard when added) and typically overflows below the fold on
+   anything under a very tall screen. A 5px near-invisible thumb was
+   enough of a discoverability problem that a client demo missed the
+   Trade Estimations section entirely (§7.14). Overrides the site-wide
+   thin scrollbar rule above only for .grid-right-pane. */
+.grid-right-pane::-webkit-scrollbar { width: 10px; }
+.grid-right-pane::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); }
+.grid-right-pane::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.35); }
+/* Firefox equivalent (Firefox ignores the ::-webkit- pseudo-elements). */
+.grid-right-pane { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.22) transparent; }
+
+/* Scroll-shadow cue: a subtle gradient masked into the bottom edge of
+   the sidebar when there's content below the fold. Default
+   background-attachment (scroll) keeps the gradient anchored to the
+   pane's viewport rather than its content, so it stays at the bottom
+   edge regardless of scroll position — reads as a natural border when
+   scrolled to the very bottom, no JS to hide it. */
+.grid-right-pane {
+  background-image: linear-gradient(to bottom, transparent 0, transparent calc(100% - 24px),
+                                    rgba(11,13,16,0.85) 100%);
+  background-repeat: no-repeat;
+}
+body.light-mode .grid-right-pane {
+  background-image: linear-gradient(to bottom, transparent 0, transparent calc(100% - 24px),
+                                    rgba(228,231,238,0.9) 100%);
+}
+
 /* ── Right Column (panel + icon rail) ──────────────────────── */
 .right-column {
   display: flex;

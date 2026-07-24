@@ -26,8 +26,9 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.18`.** Cut 2026-07-24 — split-chart
-toggle (§7.13). Recent chain: beta-1.10.17 (chart history bump, §7.12). Prior tags in this batch: beta-1.10.10 through
+**Latest, current tag: `beta-1.10.19`.** Cut 2026-07-24 — sidebar scroll
+discoverability (§7.14). Recent chain: beta-1.10.17 (chart history
+bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13). Prior tags in this batch: beta-1.10.10 through
 beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10 forge scoring loop),
 beta-1.10.16 (§7.11 housekeeping bundle). All older references in this
 doc to "beta-1.10.9 is latest" pre-date those and are stale — don't
@@ -678,6 +679,31 @@ State persists in `localStorage` under `ag-split` (`on` | `off`, default
 `dashboard/index.html` (1-line button), `dashboard/style.css` (2 rules),
 `dashboard/app.js` (`initSplitChartToggle()` ~25 lines + one wire-up
 line in the DOMContentLoaded init sequence).
+
+## 7.14. Sidebar scroll discoverability — beta-1.10.19, 2026-07-24
+
+Trigger: a live client demo missed the "Trade Estimations" panel entirely
+because the right sidebar (`.grid-right-pane`, which IS internally
+scrollable via `overflow-y: auto`) had a 5px near-invisible scrollbar
+(from the site-wide `::-webkit-scrollbar { width: 5px }` rule) and no
+visual cue that more content was below the fold. The client's cursor
+never landed on the scrollbar, so they never discovered the scroll.
+
+Fix (CSS only, no layout change, no JS):
+- Sidebar-scoped scrollbar override to 10px width with higher-opacity
+  thumb (0.22 idle, 0.35 hover) — thin scrollbars stay everywhere else.
+- Firefox equivalent via `scrollbar-width: thin; scrollbar-color: ...`.
+- Scroll-shadow: a bottom-edge gradient masked into the pane's
+  background-image, dark theme + light-theme variants. Default
+  `background-attachment: scroll` keeps the gradient anchored to the
+  pane's viewport (not its content), so it stays at the bottom edge
+  regardless of scroll position and reads as a natural panel border
+  when scrolled to the very bottom — no JS to hide/show.
+
+If the client demo still misses it (e.g. on a smaller screen where more
+than one panel is below the fold), the next escalation is either
+capping `agent-report-card` height or moving the trade-log panel out
+of the sidebar entirely — flagged, not built.
 
 ## 8. How to pick this back up
 
