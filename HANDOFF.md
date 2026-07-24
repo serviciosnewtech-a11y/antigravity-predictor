@@ -246,6 +246,40 @@ re-litigated from scratch:
   `reward_risk_tp1`) next time that function is touched, but not urgent and
   not something that changes any displayed number.
 
+## 7.5. Rollback executed 2026-07-23 — live host reset to a clean beta-1.10.11 install
+
+The hand-edit chain in §7/the update above (canonical unit swap → dedicated
+relay user → timeout bug fix) got deep enough into live-only drift that
+Luis called for a clean reset rather than continuing to hand-patch forward.
+Executed: `/opt/predictor` restored from the beta-1.10.11 bare-metal
+tarball, all three systemd units (`predictor.service`, `agent_relay.service`,
+`signal_agent.service`) reinstalled from the version-controlled source
+(wiping every hand-edit made to any of them this incident), `.env` reset to
+a fresh template. Verified clean: `predictor.service` active, `/api/status`
+responds, `/` serves the dashboard, `/ws` is available.
+
+**Chat/relay is deliberately left unconfigured.** Nothing points
+`AGENT_RELAY_CMD` at anything real right now — `/api/chat` will report
+unavailable, and that's intentional, not a bug to chase. Do not re-approach
+this by hand-patching the live host again. If/when it gets revisited:
+
+- The two real code/doc fixes from this incident (beta-1.10.10's misleading
+  `--profile metis` example, beta-1.10.11's hardcoded healthcheck timeout)
+  are still in the codebase and the current package — those don't need
+  redoing.
+- The dedicated-relay-user pattern (run `agent_relay.service` as an account
+  that isn't `predictor`, so the internet-facing dashboard process never
+  gains a path to Hermes's own credentials) was proven to work live but
+  reverts on every plain `install.sh` run (it always writes `User=predictor`
+  — no two-user support exists in the installer yet). Re-apply it by hand
+  each time, or treat "add proper two-user support to `install.sh`" as real
+  future work if this is going to be a permanent pattern.
+- Go slowly, one verified step at a time, with evidence before each edit —
+  the same discipline this whole file has been trying to model. The prior
+  attempt's actual failure mode wasn't any single wrong fix (every
+  individual fix found this incident was real and correct) — it was
+  stacking live hand-edits faster than they could be tracked.
+
 ## 8. How to pick this back up
 
 1. Confirm what state the live host is actually in — don't assume
