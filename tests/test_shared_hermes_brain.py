@@ -13,7 +13,11 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+pytest.importorskip("lightgbm")  # predictor_server imports it at module scope
 
 import hermes_persona  # noqa: E402
 import predictor_server as ps  # noqa: E402

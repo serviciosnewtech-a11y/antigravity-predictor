@@ -1,0 +1,27 @@
+[Unit]
+Description=Antigravity Predictor - forge_data/forge.db durable backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=predictor
+Group=predictor
+WorkingDirectory=/opt/predictor
+# FORGE_DATA_DIR/BACKUP_DIR/FORGE_BACKUP_RETENTION_COUNT all have safe
+# defaults in tools/backup_forge_db.py itself -- no .env dependency, same
+# principle as predictor_backup.service (see LIVE_DEPLOY_NOTES.md #2 for
+# why .env absence must not break durable-data services).
+ExecStart=/opt/predictor/.venv/bin/python /opt/predictor/tools/backup_forge_db.py
+StandardOutput=append:/opt/predictor/logs/forge_backup.log
+StandardError=append:/opt/predictor/logs/forge_backup.log
+
+# Same hardening pattern as predictor_backup.service. Backup destination
+# is deliberately outside /opt/predictor (the whole point -- see
+# tools/backup_forge_db.py docstring), so it's listed explicitly here in
+# ReadWritePaths in addition to the forge_data source dir. Shares the
+# same /opt/predictor-backups directory as signal_history backups by
+# design -- one place to look for all durable snapshots.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/predictor/logs /opt/predictor/forge_data /opt/predictor-backups

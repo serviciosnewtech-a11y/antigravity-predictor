@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=oneshot
 User=predictor
+Group=predictor
 WorkingDirectory=/opt/predictor
 # LOGS_DIR/BACKUP_DIR/BACKUP_RETENTION_COUNT all have safe defaults in
 # tools/backup_signal_log.py itself -- no .env dependency, this must keep

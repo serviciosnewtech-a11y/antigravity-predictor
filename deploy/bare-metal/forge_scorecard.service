@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=oneshot
 User=predictor
+Group=predictor
 WorkingDirectory=/opt/predictor
 # All FORGE_SCORECARD_* env vars have safe defaults in forge/scoring.py
 # and tools/forge_scorecard.py themselves -- this unit must keep working

@@ -26,11 +26,11 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.15`.** Cut 2026-07-24 with the Forge
-scoring/scorecard work (§7.10). Prior tags `beta-1.10.10` through
-`beta-1.10.14` shipped in the same session batch (§7.6/§7.8). All older
-references in this doc to "beta-1.10.9 is latest" pre-date those and are
-stale — don't trust them, trust the git tag list.
+**Latest, current tag: `beta-1.10.16`.** Cut 2026-07-24 with the housekeeping
+bundle from the post-§7.10 audit (§7.11). Prior tags in this batch:
+beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10 forge
+scoring loop). All older references in this doc to "beta-1.10.9 is latest"
+pre-date those and are stale — don't trust them, trust the git tag list.
 
 **Gotcha:** tag `beta-1.11` exists and sorts *after* `beta-1.10.9`
 alphanumerically, but it is chronologically **older** —
@@ -565,24 +565,116 @@ state forward.
   actually useful (canonical ids, current scorecard, evaluation history)
   but the code path that reads it back at startup is future work.
 
+## 7.11. Housekeeping bundle — beta-1.10.16, 2026-07-24
+
+Implemented after a full-suite audit prompted by the observation that six
+tests were failing collection when `lightgbm` wasn't installed. Audit
+surfaced additional small fragilities; bundled the cheap ones into one
+tag. Nothing here is behavioral — it's all defensive scaffolding around
+what already works.
+
+**Test-collection robustness (the trigger for this bundle).** Six tests
+import `predictor_server` at module scope; `predictor_server.py:9` does
+`import lightgbm as lgb`; missing lightgbm halted pytest collection with
+a `ModuleNotFoundError` instead of a clean skip. Added
+`pytest.importorskip("lightgbm")` guards to all six
+(`test_candle_history_depth.py`, `test_chat_does_not_block_event_loop.py`,
+`test_chat_status_relay_timeout.py`, `test_chat_unification.py`,
+`test_model_path_resolution.py`, `test_shared_hermes_brain.py`). Verified
+by pointing PYTHONPATH at a stub `lightgbm.py` that raises
+`ModuleNotFoundError`: all 6 now skip cleanly instead of erroring.
+
+**Shared test fixture.** Extracted `tests/conftest.py` with a `forge_db`
+fixture (tempdir + FORGE_DATA_DIR + module reload). Refactored
+`test_forge_db_cleanup_registry.py` to use it; other tests can adopt it
+as they get touched. Deliberately did NOT move `test_forge_scorecard_end_
+to_end.py`'s local `forge_env` fixture — it also sets
+`FORGE_SCORECARD_DUMP` which is script-runner-specific, not general.
+
+**Systemd unit consistency.** Added `Group=predictor` to
+`forge_scorecard.service` (I inherited the gap when I based it on
+predictor_backup.service, which also had it missing). Also added it to
+`predictor_backup.service` itself. All bare-metal services with
+`User=predictor` now also declare `Group=predictor` explicitly — no
+reliance on the account's default primary group being what we assume.
+
+**forge.db durable backup — filled the §7.8 gap.** New
+`tools/backup_forge_db.py`, `deploy/bare-metal/forge_backup.{service,timer}`.
+Same pattern as `backup_signal_log.py`: SQLite backup-API snapshots (NOT
+raw file copy) into the SAME `/opt/predictor-backups` directory as signal
+history backups, distinguished by filename prefix (`forge.*.db` vs
+`signal_history.*.db`). One place to look for all durable snapshots, one
+directory to point future off-host sync at. Retention prune is scoped to
+`forge.*.db` glob — regression test asserts it never touches
+`signal_history.*.db` even though they share the directory. 6-hour
+cadence via timer; `FORGE_BACKUP_RETENTION_COUNT` env-tunable (default 30,
+independent of signal-history retention). install.sh enables + starts the
+new timer.
+
+**install.sh venv verification** — the §7.7 open item, still open on the
+root-cause side but now fails fast at the right place. Added
+`[[ -x "$APP_DIR/.venv/bin/python" ]] || die "…"` immediately after
+`python3 -m venv`. Won't fix the intermittent silent partial-venv
+failure, but converts the eventual `predictor.service` 203/EXEC
+crash-loop into an install-time abort with an actionable message
+(check disk, python3-venv package, APP_DIR writability). If the failure
+recurs on the next fresh install, THIS is where it now stops — capture
+the previous install.sh output before rerunning.
+
+**`tools/run_tests.sh` deps warning.** With the importorskip guards in
+place, a partial environment now produces a green run of 60 tests when
+85+ should have run — worse than the loud red run of 6 collection errors.
+Added a preflight check for `lightgbm`, `pandas`, `fastapi`, `loguru`
+that prints a WARNING with the fix (`pip install -r requirements.txt`)
+before the test run starts. Doesn't abort — the warning is more useful
+than blocking, since sometimes the operator IS running a subset
+intentionally.
+
+**Tests:** 5 new tests in `test_backup_forge_db.py` (data preservation,
+distinct-filename uniqueness, forge-scoped retention isolation from
+signal_history files, missing-source graceful handling, default-dest-dir
+lands outside app dir). Full suite: **90 passed** (85 from beta-1.10.15
++ 5 new), 0 failed. Also verified: forge tests still green after
+switching to the shared conftest fixture; the 6 lightgbm-guarded tests
+skip cleanly under a stubbed missing lightgbm.
+
+**Explicitly out of scope for this tag (deferred, not forgotten):**
+- Basic hardening for `macro_refresh.service` (still no
+  `NoNewPrivileges`/`PrivateTmp`/`ProtectSystem`/`ReadWritePaths` —
+  pre-existing gap, not urgent, low blast radius on a oneshot yfinance
+  fetch).
+- `config.json` host-binding sed pattern (works with discipline, brittle
+  under regeneration — real fix is env-var-driven config).
+- `forge.Dockerfile` uses hardcoded unpinned deps instead of
+  `requirements.txt` — dep drift risk, matters only on the docker deploy
+  target which has less live testing overall (§6).
+- Docker deploy has no scorecard scheduler — bare-metal only for now.
+- Housekeeping of pre-2026-07 root-level doc files (`RESCUE_HANDOFF.md`,
+  `SESSION_WAYPOINT.md`, etc.) — needs a human decision on
+  archive-vs-delete per file.
+
+None of the above is a blocker for the current rehearsal deploy.
+
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.15`** as of this writing — Forge improving
-   loop (§7.10). Ignore the older references in this doc to "latest is
-   1.10.9" — those pre-date §7.6 through §7.10. Ignore `beta-1.11` (see §2
-   for the numbering trap).
+1. **Latest tag is `beta-1.10.16`** as of this writing — housekeeping
+   bundle (§7.11) on top of the beta-1.10.15 Forge improving loop
+   (§7.10). Ignore the older references in this doc to "latest is
+   1.10.9" — those pre-date §7.6 through §7.11. Ignore `beta-1.11` (see
+   §2 for the numbering trap).
 2. Confirm what state the live host is actually in — don't assume the
    latest tag is deployed just because it's tagged. `git -C /opt/predictor
-   rev-parse HEAD` on the live host against `beta-1.10.15`.
+   rev-parse HEAD` on the live host against `beta-1.10.16`.
 3. If the live `/api/chat` relay is still pointed at anything other than
    the isolated `/opt/predictor-metis` install, that's the next open item
    (§4, task #65).
 4. Check the live `.env` for a stray `AGENT_RELAY_TIMEOUT_S=10` (§4).
-5. beta-1.10.12/1.10.13/1.10.14/1.10.15 (loopback bind + firewall, nginx
-   basic auth, data backup + candle history depth, Forge scoring loop —
-   §7.6/§7.8/§7.10) are shipped/packaged but **not yet applied to the
-   rehearsal host** as of this writing — a fresh `install.sh` run from
-   beta-1.10.15 gets all of it at once.
+5. beta-1.10.12/1.10.13/1.10.14/1.10.15/1.10.16 (loopback bind + firewall,
+   nginx basic auth, data backup + candle history depth, Forge scoring
+   loop, housekeeping bundle — §7.6/§7.8/§7.10/§7.11) are shipped/
+   packaged but **not yet applied to the rehearsal host** as of this
+   writing — a fresh `install.sh` run from beta-1.10.16 gets all of it at
+   once, including the new `forge_backup.timer` for forge.db durability.
 6. Watch the first live scorecard runs on the rehearsal host once real
    trades accumulate — the 50-trade gate is a first-guess default. If most
    strategies stay at `not_enough_data` for longer than expected, either

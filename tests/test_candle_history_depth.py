@@ -18,7 +18,14 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+# predictor_server.py imports lightgbm at module scope; skip the whole file
+# cleanly if lightgbm isn't installed (e.g. a partial dev environment) rather
+# than halting pytest collection with a cryptic ModuleNotFoundError.
+pytest.importorskip("lightgbm")
 
 import predictor_server as ps  # noqa: E402
 

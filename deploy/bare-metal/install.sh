@@ -75,6 +75,15 @@ chmod +x "$APP_DIR/retrain_all.sh"
 # ── Python venv ───────────────────────────────────────────────────────────────
 log "Setting up Python venv…"
 python3 -m venv "$APP_DIR/.venv"
+# Verify venv actually created before continuing -- addresses the §7.7
+# recurring failure mode where a partial/silent venv creation left
+# predictor.service crash-looping on 203/EXEC. This makes it fail here,
+# with an actionable message, instead of much later at service start
+# with a cryptic exit code. Root cause of the underlying failure is
+# still unknown -- if this triggers, capture the previous few lines of
+# install.sh output to help diagnose (disk full? python3-venv package
+# broken? permission on APP_DIR? -- all real hypotheses, none confirmed).
+[[ -x "$APP_DIR/.venv/bin/python" ]] || die "venv creation failed: $APP_DIR/.venv/bin/python is missing or not executable. Check disk space, that python3-venv is installed (apt install python3-venv), and that $APP_DIR is writable by root."
 "$APP_DIR/.venv/bin/pip" install --upgrade pip -q
 if [[ -f "$APP_DIR/requirements.txt" ]]; then
     "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt" -q
@@ -218,6 +227,15 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
     "$APP_DIR/deploy/bare-metal/predictor_backup.service" > /etc/systemd/system/predictor_backup.service
 cp "$APP_DIR/deploy/bare-metal/predictor_backup.timer" /etc/systemd/system/predictor_backup.timer
 
+# forge_backup -- periodic durable backup of forge.db (paper-trade log +
+# scorecard/evaluation_history). Same target directory as
+# predictor_backup ($BACKUP_DIR); filenames self-identify. Added
+# beta-1.10.16 after §7.10 made forge.db carry evaluation trajectory
+# worth preserving.
+sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
+    "$APP_DIR/deploy/bare-metal/forge_backup.service" > /etc/systemd/system/forge_backup.service
+cp "$APP_DIR/deploy/bare-metal/forge_backup.timer" /etc/systemd/system/forge_backup.timer
+
 # forge_scorecard -- periodic evaluation pass over Forge trade history.
 # Reads forge_data/forge.db, writes strategy_scorecard + evaluation_history,
 # dumps a plain-language text summary to a directory OUTSIDE $APP_DIR (same
@@ -232,7 +250,7 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
 cp "$APP_DIR/deploy/bare-metal/forge_scorecard.timer" /etc/systemd/system/forge_scorecard.timer
 
 systemctl daemon-reload
-systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer forge_scorecard.timer
+systemctl enable predictor macro_refresh.timer signal_agent agent_relay predictor_backup.timer forge_backup.timer forge_scorecard.timer
 log "Services enabled."
 
 # ── Basic auth ────────────────────────────────────────────────────────────────
@@ -306,10 +324,11 @@ sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" "$APP_DIR/src/fetch_macro.py" \
     log "WARN: initial macro fetch failed — run manually before retraining."
 
 # ── Start services ────────────────────────────────────────────────────────────
-log "Starting predictor, macro timer, backup timer, forge scorecard timer, and agent relay…"
+log "Starting predictor, macro timer, backup timers, forge scorecard timer, and agent relay…"
 systemctl start predictor
 systemctl start macro_refresh.timer
 systemctl start predictor_backup.timer
+systemctl start forge_backup.timer
 systemctl start forge_scorecard.timer
 # Always started — degrades gracefully (see agent_relay.service comment
 # above) rather than crashing if AGENT_RELAY_CMD's binary isn't installed.

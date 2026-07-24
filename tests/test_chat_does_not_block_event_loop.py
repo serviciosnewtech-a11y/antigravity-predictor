@@ -43,7 +43,13 @@ import sys
 import threading
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+# predictor_server.py imports lightgbm at module scope; skip cleanly if
+# lightgbm isn't installed rather than halting collection.
+pytest.importorskip("lightgbm")
 
 import predictor_server as ps  # noqa: E402
 

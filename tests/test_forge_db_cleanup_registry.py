@@ -19,32 +19,11 @@ exactly the class of bug the migration was designed to prevent.
 """
 from __future__ import annotations
 
-import importlib
 import json
 import sqlite3
-import sys
-import tempfile
 import uuid as _uuid
-from pathlib import Path
 
-import pytest
-
-
-@pytest.fixture
-def forge_db(monkeypatch):
-    """Isolated forge DB in a tempdir. Reloads the forge.db module so its
-    module-level DB_PATH picks up the FORGE_DATA_DIR env var."""
-    tmp = tempfile.mkdtemp()
-    monkeypatch.setenv("FORGE_DATA_DIR", tmp)
-
-    # Force-reload forge.db so DB_PATH re-resolves against the fresh env.
-    if "forge.db" in sys.modules:
-        del sys.modules["forge.db"]
-    if "forge" in sys.modules:
-        del sys.modules["forge"]
-    from forge import db as db_mod
-    importlib.reload(db_mod)
-    return db_mod
+# `forge_db` fixture is provided by tests/conftest.py.
 
 
 def _seed_fragmented(db, strategies_list, restarts: int):

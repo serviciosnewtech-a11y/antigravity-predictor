@@ -1,0 +1,18 @@
+[Unit]
+Description=Run Forge forge.db backup periodically
+Requires=forge_backup.service
+
+[Timer]
+# Same cadence as predictor_backup.timer (6h) -- forge.db grows more
+# slowly than signal_history.db in absolute terms (fewer rows per tick),
+# but the scorecard/evaluation_history writes accumulate 24/day, so 6h
+# gives ~4 snapshots per day which is plenty of granularity to roll back
+# from an accidental wipe without exploding disk usage against the
+# default 30-backup retention.
+OnBootSec=7min
+OnUnitActiveSec=6h
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
