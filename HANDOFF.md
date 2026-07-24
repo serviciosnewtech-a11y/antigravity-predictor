@@ -26,10 +26,10 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.22`.** Cut 2026-07-24 — off-host sync
-stub via `OFFSITE_BACKUP_CMD` env seam + `sync_offsite.timer` (§7.17).
-Prior: `beta-1.10.21` (configstate backup, §7.16), `beta-1.10.20` (repo
-housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
+**Latest, current tag: `beta-1.10.23`.** Cut 2026-07-24 — restore
+playbook + `tools/restore_from_backup.sh` + drill (§7.18). Prior:
+`beta-1.10.22` (off-host sync stub, §7.17), `beta-1.10.21` (configstate
+backup, §7.16), `beta-1.10.20` (repo housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
 bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13), beta-1.10.19
 (sidebar scroll discoverability, §7.14). Prior tags in this batch:
 beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10
@@ -937,12 +937,92 @@ default backup dir matches the three local backup scripts.
   (rclone / rsync / aws s3 / azcopy) handles this natively; no reason
   to reimplement it here.
 
+## 7.18. Restore playbook + drill -- beta-1.10.23, 2026-07-24
+
+Closes the backup/off-host/restore tag chain (§7.15/7.16/7.17). Ships:
+
+**`docs/RESTORE_PLAYBOOK.md`** -- the ordered runbook. Prereqs (install.sh
+on a fresh VPS + pull snapshots into `/opt/predictor-backups/`), stopping
+the services, picking snapshots (dry-run + `--timestamp` for point-in-time
+recovery), applying, restarting, and verifying via `/api/status` +
+`/health` + `/recommendations` + a `sqlite3` row-count spot-check. Covers
+the worked-example scenario for "bad recalibrate at 15:47, roll back
+config-only" (`--only configstate` + `--timestamp`), off-host pull, and
+the "verify a snapshot into a scratch dir" drill.
+
+**`tools/restore_from_backup.sh`** -- the sharp end of the playbook.
+Takes `--source-dir` / `--target-dir`, optional `--timestamp
+YYYYMMDD-HHMMSS[-NNNNNN]` (point-in-time: pick newest at-or-before
+cutoff, per family), optional `--only signal_history|forge|configstate`
+(partial restore -- other families untouched), `--dry-run` flag,
+`--force` flag. **Refuses to run against an active predictor.service
+without --force**, catching the classic "restore while the process is
+holding the DB open" footgun. Every real run writes a receipt to
+`<target>/logs/restore_applied.log` containing the selected snapshot
+filenames, their sha256s, and the UTC timestamp -- audit trail against
+"which backup did we actually apply?".
+
+Snapshot picking is lexicographic on the `YYYYMMDD-HHMMSS-<microseconds>`
+stamp inside the filename, which is safe for chronological ordering.
+`--timestamp` accepts a truncated stamp (e.g. `20260724-150000`) and
+picks the newest snapshot whose stamp is `<=` the cutoff.
+
+Configstate extraction is deliberately per-arcname rather than a bare
+`tar -xf`: `etc/nginx/.htpasswd` inside the tarball routes to
+`/etc/nginx/.htpasswd`, not `<target>/etc/nginx/.htpasswd`. When the
+target isn't writable (test drills, non-root runs), the htpasswd is
+skipped with a clear log line and noted in the receipt.
+
+**Tests** (`tests/test_restore_from_backup.py`, 9 new): full end-to-end
+data-integrity check (both DBs round-trip via `sqlite3.iterdump`; every
+configstate file lands with the right contents), dry-run leaves target
+empty, `--timestamp` picks the right snapshot with three at 10/11/12h,
+`--only` restricts to one family (others untouched), missing family
+skipped gracefully, empty source dir exits 0, missing source dir fails,
+missing required arg fails, receipt contains selected filenames.
+
+**End-to-end drill** (run in a workspace tempdir during tag prep):
+seeded a synthetic `orig/` with realistic SQLite content (3 signal_events,
+2 signal_history trades, 3 forge trades) + 14 configstate sources (6
+models, metadata/metrics, .env, htpasswd, config × 2, persona memory,
+etc), ran all four backup scripts (predictor_backup, forge_backup,
+config_backup, `sync_backups_offsite.py` with `OFFSITE_BACKUP_CMD=
+/bin/true` for the dry sync), then restored into a fresh
+`restored/` and compared byte-for-byte. **Parity: ALL MATCH.** Both
+SQLite DBs match on `iterdump` output (9-row / 6-row identical); every
+one of the 14 configstate files matches on `filecmp.cmp(shallow=False)`.
+The htpasswd was skipped (test drill isn't root, can't write /etc); the
+receipt logs this explicitly, exactly as designed.
+
+**Files shipped:**
+- New: `docs/RESTORE_PLAYBOOK.md`, `tools/restore_from_backup.sh`
+  (executable), `tests/test_restore_from_backup.py` (9 tests).
+
+**Tests total:** 118 (109 -> 118, all green). Full backup/off-host/
+restore chain: 90 (pre-chain) -> 98 (backup) -> 109 (off-host) -> 118
+(restore).
+
+**Not in this tag:**
+- Automated off-host PULL (the counterpart to `sync_backups_offsite.py`'s
+  push). The playbook §7 documents "rsync from off-host into
+  /opt/predictor-backups, then run restore" as the manual path. If a
+  recurring pull command becomes real, it's a peer script next to
+  `sync_backups_offsite.py`.
+- A restore-verification cron. The `§8 drill` in the playbook is manual
+  ("do this quarterly") for now; automating it would need a decision
+  about which snapshot to verify each time and where to report the
+  verdict.
+- Anything about rebuilding models from scratch. That's the retrain
+  pipeline (`retrain_all.sh`), covered elsewhere and out of scope for a
+  restore-from-backup runbook.
+
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.22`** as of this writing — off-host sync
-   stub (§7.17: `OFFSITE_BACKUP_CMD` env seam + `sync_offsite.timer`)
-   on top of beta-1.10.21's configstate backup (§7.16) on top of
-   beta-1.10.20's repo housekeeping (§7.15). Ignore the older references in
+1. **Latest tag is `beta-1.10.23`** as of this writing — restore
+   playbook + `tools/restore_from_backup.sh` + end-to-end drill
+   (§7.18), on top of the backup/off-host chain
+   (§7.15/7.16/7.17: repo housekeeping, configstate backup, off-host
+   sync stub). Full test suite: 118 green. Ignore the older references in
    this doc to "latest is 1.10.9" — those pre-date §7.6 through §7.15.
    Ignore `beta-1.11` (see §2 for the numbering trap).
 2. Confirm what state the live host is actually in — don't assume the
