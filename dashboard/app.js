@@ -1251,7 +1251,7 @@ function fetchCandlesForSymbol2(sym) {
   if (!state.candleSeries2) return;
   const enc = encodeURIComponent(sym);
   const tf  = encodeURIComponent(isMacroDisplaySymbol(sym) ? "1d" : "15m");
-  fetchJsonWithFallback(`/api/candles?symbol=${enc}&timeframe=${tf}&limit=300`)
+  fetchJsonWithFallback(`/api/candles?symbol=${enc}&timeframe=${tf}&limit=1000`)
     .then(({ data: candles }) => {
       if (!candles || candles.length === 0) throw new Error(`No candles returned for ${sym}`);
       state.candleSeries2.setData(candles);
@@ -1738,7 +1738,7 @@ function fetchCandlesForSymbol(sym) {
 
   const enc  = encodeURIComponent(sym);
   const tf   = encodeURIComponent(state.activeTimeframe || "15m");
-  fetchJsonWithFallback(`/api/candles?symbol=${enc}&timeframe=${tf}&limit=300`)
+  fetchJsonWithFallback(`/api/candles?symbol=${enc}&timeframe=${tf}&limit=1000`)
     .then(({ data: candles }) => {
       if (!candles || candles.length === 0) throw new Error(`No ${state.activeTimeframe} candles returned for ${sym}`);
       state.candleSeries.setData(candles);

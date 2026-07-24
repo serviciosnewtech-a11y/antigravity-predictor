@@ -26,11 +26,12 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.16`.** Cut 2026-07-24 with the housekeeping
-bundle from the post-§7.10 audit (§7.11). Prior tags in this batch:
-beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10 forge
-scoring loop). All older references in this doc to "beta-1.10.9 is latest"
-pre-date those and are stale — don't trust them, trust the git tag list.
+**Latest, current tag: `beta-1.10.17`.** Cut 2026-07-24 — dashboard chart
+history bump (§7.12). Prior tags in this batch: beta-1.10.10 through
+beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10 forge scoring loop),
+beta-1.10.16 (§7.11 housekeeping bundle). All older references in this
+doc to "beta-1.10.9 is latest" pre-date those and are stale — don't
+trust them, trust the git tag list.
 
 **Gotcha:** tag `beta-1.11` exists and sorts *after* `beta-1.10.9`
 alphanumerically, but it is chronologically **older** —
@@ -654,6 +655,14 @@ skip cleanly under a stubbed missing lightgbm.
   archive-vs-delete per file.
 
 None of the above is a blocker for the current rehearsal deploy.
+
+## 7.12. Dashboard chart history — beta-1.10.17, 2026-07-24
+
+Server already stored 1000 candles per symbol (§7.8), but the dashboard
+was only asking for 300 in its `/api/candles` fetch (~3 days of 15m vs
+the ~10.4 days actually available). Two-line fix: `limit=300` → `limit=
+1000` in `dashboard/app.js` at the two `fetchCandlesForSymbol*` call
+sites (lines 1254 + 1741). No backend change. Node syntax check clean.
 
 ## 8. How to pick this back up
 
