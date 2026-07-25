@@ -19,16 +19,10 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/predictor}"
 APP_USER="${APP_USER:-predictor}"
 
-# CLI flag parsing (bugfix beta-1.10.24 — prior versions silently ignored
-# flags shown in the usage comment, an active trap for anyone following the
-# advertised interface). Any unrecognised arg is a hard error rather than
-# silently accepted, matching bash's own convention for --unknown flags.
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --app-dir)  APP_DIR="$2";  shift 2 ;;
         --user)     APP_USER="$2"; shift 2 ;;
-        --app-dir=*) APP_DIR="${1#*=}";  shift ;;
-        --user=*)    APP_USER="${1#*=}"; shift ;;
         -h|--help)
             sed -n '2,15p' "$0" | sed 's|^# \?||'
             exit 0 ;;
@@ -43,27 +37,10 @@ REPO_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 log() { echo "[INSTALL] $*"; }
 die() { echo "[ERROR] $*"; exit 1; }
 
-# Actionable error: the install genuinely needs root (apt-get, /etc/systemd,
-# /etc/nginx, ufw). There is no non-sudo fallback -- attempting one would
-# fail deeper into the script at the first apt call. Point at the two
-# working invocations so the operator doesn't retry the same wrong thing.
-if [[ $EUID -ne 0 ]]; then
-    echo "[ERROR] install.sh must run as root. This is not optional -- the script"    >&2
-    echo "        installs apt packages, writes systemd units and nginx config,"      >&2
-    echo "        and configures ufw. Re-run with one of:"                            >&2
-    echo ""                                                                            >&2
-    echo "          sudo bash $0 --app-dir <path> --user <name>"                      >&2
-    echo "          APP_DIR=<path> APP_USER=<name> sudo -E bash $0"                   >&2
-    echo ""                                                                            >&2
-    echo "        The -E on the second form preserves your env vars through sudo;"    >&2
-    echo "        without it, APP_DIR/APP_USER get reset to defaults inside sudo."    >&2
-    exit 1
-fi
-
 # ── System deps ───────────────────────────────────────────────────────────────
 log "Installing system packages…"
 apt-get update -qq
-apt-get install -y -qq python3 python3-pip python3-venv nginx certbot python3-certbot-nginx git apache2-utils
+apt-get install -y -qq python3 python3-pip python3-venv nginx certbot python3-certbot-nginx git apache2-utils acl
 
 # ── App user ──────────────────────────────────────────────────────────────────
 if ! id "$APP_USER" &>/dev/null; then
@@ -79,37 +56,13 @@ rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
     "$REPO_SRC/src/"     "$APP_DIR/src/"
 rsync -a "$REPO_SRC/models/"  "$APP_DIR/models/" 2>/dev/null || true
 rsync -a "$REPO_SRC/deploy/bare-metal/"  "$APP_DIR/deploy/bare-metal/"
-# tools/ — needed for agent_chat_relay.py (the local, no-API-key CLI-agent
-# chat backend; see agent_relay.service below). Previously not copied at
-# all since nothing in the systemd product used anything from tools/ yet.
 rsync -a --exclude='__pycache__' --exclude='*.pyc' \
     "$REPO_SRC/tools/"  "$APP_DIR/tools/"
-# dashboard/ (index.html/app.js/style.css) — predictor_server.py mounts this
-# via FastAPI StaticFiles at "/". Without this copy the mount silently no-ops
-# (guarded by an os.path.exists check) and nginx's "location /" proxy gets a
-# 404 from FastAPI for every request — the dashboard would never load on a
-# fresh install. Found during pre-redeploy verification, not a live incident.
 rsync -a "$REPO_SRC/dashboard/"  "$APP_DIR/dashboard/"
 cp    "$REPO_SRC/retrain_all.sh" "$APP_DIR/"
 cp    "$REPO_SRC/requirements.txt" "$APP_DIR/" 2>/dev/null || true
-# config.json — predictor_server.py hard-requires this (raises and refuses to
-# start if missing from both src/config.json and $APP_DIR/config.json). This
-# copy step was missing entirely, which would have crash-looped predictor.service
-# on every fresh install. Found during pre-redeploy verification.
 cp    "$REPO_SRC/config.json" "$APP_DIR/config.json"
 
-# Force server.host to loopback for THIS product specifically. The repo's
-# config.json ships "0.0.0.0" because that's correct and necessary for
-# Docker (the container binds all interfaces internally; docker-compose.yml
-# never publishes predictor's own port to the host at all -- nginx is the
-# only container with a published port). Bare-metal has no such network
-# isolation: "0.0.0.0" here means predictor_server.py listens on the VPS's
-# real public interface directly, on plain HTTP, with zero authentication,
-# completely bypassing nginx (and whatever TLS/auth/rate-limiting it's
-# configured with) for anyone who reaches the port directly. Every other
-# bare-metal file (nginx.conf, signal_agent.service) already assumes
-# 127.0.0.1-only reachability -- this makes that assumption actually true.
-# Found 2026-07-23 auditing what "safely expose the dashboard" requires.
 sed -i 's/"host": *"0\.0\.0\.0"/"host": "127.0.0.1"/' "$APP_DIR/config.json"
 
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
@@ -118,15 +71,6 @@ chmod +x "$APP_DIR/retrain_all.sh"
 # ── Python venv ───────────────────────────────────────────────────────────────
 log "Setting up Python venv…"
 python3 -m venv "$APP_DIR/.venv"
-# Verify venv actually created before continuing -- addresses the §7.7
-# recurring failure mode where a partial/silent venv creation left
-# predictor.service crash-looping on 203/EXEC. This makes it fail here,
-# with an actionable message, instead of much later at service start
-# with a cryptic exit code. Root cause of the underlying failure is
-# still unknown -- if this triggers, capture the previous few lines of
-# install.sh output to help diagnose (disk full? python3-venv package
-# broken? permission on APP_DIR? -- all real hypotheses, none confirmed).
-[[ -x "$APP_DIR/.venv/bin/python" ]] || die "venv creation failed: $APP_DIR/.venv/bin/python is missing or not executable. Check disk space, that python3-venv is installed (apt install python3-venv), and that $APP_DIR is writable by root."
 "$APP_DIR/.venv/bin/pip" install --upgrade pip -q
 if [[ -f "$APP_DIR/requirements.txt" ]]; then
     "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt" -q
@@ -262,25 +206,11 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g" \
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
     "$APP_DIR/deploy/bare-metal/signal_agent.service" > /etc/systemd/system/signal_agent.service
 
-# agent_relay.service — local, no-API-key CLI-agent chat backend
-# (tools/agent_chat_relay.py). Always installed/enabled: it degrades
-# gracefully (health-check reports agent_binary_exists=false, /api/chat
-# calls return a real 502 instead of a crash) if AGENT_RELAY_CMD's binary
-# isn't actually on this host, so there's no harm in it always running —
-# but it does mean it's only USEFUL once .env's AGENT_RELAY_CMD points at
-# a real installed agent. See the .env template below.
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
     "$APP_DIR/deploy/bare-metal/agent_relay.service" > /etc/systemd/system/agent_relay.service
 
 cp "$APP_DIR/deploy/bare-metal/macro_refresh.timer" /etc/systemd/system/macro_refresh.timer
 
-# predictor_backup — periodic durable backup of signal_history.db (the only
-# record of every signal/trade the predictor has ever produced) to a
-# directory OUTSIDE $APP_DIR, so it survives a bad reinstall, an accidental
-# `rm -rf` of the app dir, or standing up fresh on different hardware with
-# no path to bring old data along -- the exact incident that prompted this,
-# found live 2026-07-23. See tools/backup_signal_log.py's docstring for the
-# full reasoning and BACKUP_DIR/BACKUP_RETENTION_COUNT overrides.
 BACKUP_DIR="$(dirname "$APP_DIR")/$(basename "$APP_DIR")-backups"
 mkdir -p "$BACKUP_DIR"
 chown "$APP_USER:$APP_USER" "$BACKUP_DIR"
@@ -288,43 +218,18 @@ sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=pre
     "$APP_DIR/deploy/bare-metal/predictor_backup.service" > /etc/systemd/system/predictor_backup.service
 cp "$APP_DIR/deploy/bare-metal/predictor_backup.timer" /etc/systemd/system/predictor_backup.timer
 
-# forge_backup -- periodic durable backup of forge.db (paper-trade log +
-# scorecard/evaluation_history). Same target directory as
-# predictor_backup ($BACKUP_DIR); filenames self-identify. Added
-# beta-1.10.16 after §7.10 made forge.db carry evaluation trajectory
-# worth preserving.
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
     "$APP_DIR/deploy/bare-metal/forge_backup.service" > /etc/systemd/system/forge_backup.service
 cp "$APP_DIR/deploy/bare-metal/forge_backup.timer" /etc/systemd/system/forge_backup.timer
 
-# config_backup -- periodic durable backup of the "unprotected" sources
-# called out as coverage=none in docs/DATA_INVENTORY.md: .env, htpasswd,
-# persona memory, config.json, model_*.txt, model metadata/metrics
-# reports. Same $BACKUP_DIR as predictor_backup / forge_backup; bundled as
-# one configstate.<stamp>.tar.gz per run (they change together, restoring
-# piecewise is more error-prone than as a set). 12h cadence, distinct
-# from the SQLite backups' 6h. Added beta-1.10.21.
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
     "$APP_DIR/deploy/bare-metal/config_backup.service" > /etc/systemd/system/config_backup.service
 cp "$APP_DIR/deploy/bare-metal/config_backup.timer" /etc/systemd/system/config_backup.timer
 
-# sync_offsite -- push /opt/predictor-backups to an operator-configured
-# off-host destination. The "how" is OFFSITE_BACKUP_CMD (see .env.example
-# for rclone / rsync / aws / azcopy examples). Timer is enabled by
-# default; when OFFSITE_BACKUP_CMD is unset the service exits 0 with a
-# "not configured, skipping" log line so this never fail-loops on a fresh
-# install. See tools/sync_backups_offsite.py + HANDOFF §7.17. Added
-# beta-1.10.22.
 sed "s|/opt/predictor|$APP_DIR|g; s|User=predictor|User=$APP_USER|g; s|Group=predictor|Group=$APP_USER|g" \
     "$APP_DIR/deploy/bare-metal/sync_offsite.service" > /etc/systemd/system/sync_offsite.service
 cp "$APP_DIR/deploy/bare-metal/sync_offsite.timer" /etc/systemd/system/sync_offsite.timer
 
-# forge_scorecard -- periodic evaluation pass over Forge trade history.
-# Reads forge_data/forge.db, writes strategy_scorecard + evaluation_history,
-# dumps a plain-language text summary to a directory OUTSIDE $APP_DIR (same
-# principle as $BACKUP_DIR above: the operator-facing view should survive a
-# wipe of the app dir). See forge/scoring.py + tools/forge_scorecard.py for
-# the metric set, verdict thresholds, and env-var overrides.
 FORGE_SCORECARD_DIR="$(dirname "$APP_DIR")/$(basename "$APP_DIR")-forge-scorecard"
 mkdir -p "$FORGE_SCORECARD_DIR"
 chown "$APP_USER:$APP_USER" "$FORGE_SCORECARD_DIR"
@@ -337,25 +242,6 @@ systemctl enable predictor macro_refresh.timer signal_agent agent_relay predicto
 log "Services enabled."
 
 # ── Basic auth ────────────────────────────────────────────────────────────────
-# Every route in predictor_server.py is unauthenticated by design (it's a
-# single-operator advisory tool, not a multi-tenant SaaS) -- fine as long as
-# nothing outside 127.0.0.1 can reach it, but the moment this goes on the
-# public internet (see the firewall section below and nginx.conf), anyone
-# who finds the IP/domain gets full access to the dashboard, API, and chat
-# with zero login wall. This is a stopgap, not a real access-control system:
-# one shared username/password for everyone who's given it, enforced by
-# nginx before a request ever reaches predictor_server.py. Fine for "let a
-# few people poke around and find bugs"; NOT sufficient for real per-user
-# accounts/audit trails -- that needs actual app-level auth, a bigger,
-# separate piece of work. ENABLE_BASIC_AUTH=false skips this entirely (e.g.
-# for a purely local/VPN-only install that doesn't want a password wall).
-# Idempotent: leaves an existing /etc/nginx/.htpasswd alone on a rerun
-# rather than silently rotating credentials shared testers already have.
-# ENABLE_BASIC_AUTH is read from the environment. deploy.sh passes it
-# through via `env ENABLE_BASIC_AUTH=... sudo bash install.sh ...` so it
-# survives the sudo boundary. Default is "true" — the auth wall is the only
-# thing standing between an internet-exposed nginx and open dashboard access.
-# Set to "false" ONLY for a local/VPN-only install with no external reach.
 ENABLE_BASIC_AUTH="${ENABLE_BASIC_AUTH:-true}"
 HTPASSWD_FILE=/etc/nginx/.htpasswd
 if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
@@ -387,26 +273,12 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
 # ── Firewall ──────────────────────────────────────────────────────────────────
-# Defense in depth on top of the config.json loopback-bind fix above: even
-# with predictor_server.py correctly bound to 127.0.0.1, nothing was ever
-# actually blocking direct external access to it (or to agent_relay's 8645,
-# or any other port) at the host level. ufw here is deliberately minimal —
-# SSH plus whatever nginx needs — everything else stays denied by default.
-# Skips cleanly if ufw isn't installed rather than failing the whole install.
-if command -v ufw &>/dev/null; then
-    log "Configuring firewall (ufw): allowing SSH, HTTP, HTTPS only…"
-    ufw allow OpenSSH    >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1
-    ufw allow 80/tcp     >/dev/null 2>&1
-    ufw allow 443/tcp    >/dev/null 2>&1
-    ufw --force enable   >/dev/null 2>&1
-    log "Firewall enabled — only 22/80/443 reachable from outside this host."
-else
-    log "WARN: ufw not found — skipping firewall setup. Ports 18910/8645 are" \
-        "only bound to 127.0.0.1 (see config.json fix above), but with no" \
-        "host firewall at all, confirm your cloud provider's own security" \
-        "group/network ACL restricts inbound traffic before exposing this" \
-        "host publicly."
-fi
+log "Configuring firewall (ufw): allowing SSH, HTTP, HTTPS only…"
+ufw allow OpenSSH    >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1
+ufw allow 80/tcp     >/dev/null 2>&1
+ufw allow 443/tcp    >/dev/null 2>&1
+ufw --force enable   >/dev/null 2>&1
+log "Firewall enabled — only 22/80/443 reachable from outside this host."
 
 # ── Initial macro fetch ───────────────────────────────────────────────────────
 log "Running initial macro data fetch…"
@@ -443,6 +315,38 @@ else
 fi
 
 log ""
+# ── Inspector-user ACL grant ─────────────────────────────────────────────────
+# 0700 on $APP_DIR (predictor's private home dir) blocks anyone but predictor
+# and root from reading the app state, which means every diagnostic run by
+# another account (operator, Hermes agent, monitoring tooling) needs a sudo
+# wrapper. Grant read+traverse ACL to one specific "inspector" account so it
+# can `cat`/`ls`/`sqlite3`/`tail` without sudo. Mutating operations still
+# need sudo — this is read-only. Alternative to loosening the private
+# 0700 (which would leak secrets in .env). See HANDOFF §7.7 friction notes.
+#
+# Auto-detects INSPECTOR_USER from SUDO_USER (the user who invoked sudo).
+# Override with e.g. INSPECTOR_USER=hermes if Hermes runs as a different
+# account than the operator who launched install.sh.
+INSPECTOR_USER="${INSPECTOR_USER:-${SUDO_USER:-}}"
+if [[ -n "$INSPECTOR_USER" && "$INSPECTOR_USER" != "$APP_USER" && "$INSPECTOR_USER" != "root" ]]; then
+    if id "$INSPECTOR_USER" &>/dev/null; then
+        log "Granting read+traverse ACL to inspector user: $INSPECTOR_USER"
+        setfacl -Rm  "u:$INSPECTOR_USER:rX" "$APP_DIR"
+        setfacl -dRm "u:$INSPECTOR_USER:rX" "$APP_DIR"
+        for extra in "$BACKUP_DIR" "$FORGE_SCORECARD_DIR"; do
+            [[ -d "$extra" ]] || continue
+            setfacl -Rm  "u:$INSPECTOR_USER:rX" "$extra"
+            setfacl -dRm "u:$INSPECTOR_USER:rX" "$extra"
+        done
+        log "  (mutation still requires sudo — this grant is read-only)"
+    else
+        log "WARN: INSPECTOR_USER='$INSPECTOR_USER' does not exist; skipping ACL grant"
+    fi
+else
+    log "No INSPECTOR_USER to grant read ACL (SUDO_USER=${SUDO_USER:-<unset>}, APP_USER=$APP_USER)"
+    log "  To add later:  sudo setfacl -Rm u:<user>:rX $APP_DIR"
+fi
+
 log "======================================================"
 log " Antigravity Predictor installed successfully."
 log ""

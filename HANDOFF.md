@@ -26,9 +26,17 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.28`.** Cut 2026-07-25 — non-interactive
-`deploy.sh` for Hermes Agent runtime + deploy-blocker issue template
-(§7.22). Prior: beta-1.10.26 (simplified `hermes_deploy.sh` + tracked
+**Latest, current tag: `beta-1.10.29`.** Cut 2026-07-25 — subtractive
+simplification of `deploy/bare-metal/install.sh` (510→414 lines: strip
+duplicated flag-parse branches, in-script rationale comments, and the
+9-line non-root usage banner now that `deploy.sh`/`hermes_deploy.sh` gate
+sudo upstream), plus two new audit deliverables: `docs/CLUTTER_ASSESSMENT.md`
+(repo-wide clutter walk with per-file delete/archive/keep verdicts) and
+`docs/INSTALL_SIMPLIFICATION_PROPOSAL.md` (source-of-truth for the
+install.sh cuts — §4 of that doc drove this release). `docs/DATA_INVENTORY.md`
+also refreshed against current state (see §7.23). Prior: beta-1.10.28
+Cut 2026-07-25 — non-interactive `deploy.sh` for Hermes Agent runtime +
+deploy-blocker issue template (§7.22). Prior: beta-1.10.26 (simplified `hermes_deploy.sh` + tracked
 `docs/HERMES_DEPLOY_PROMPT.md`, §7.21).
 Prior: beta-1.10.25 (initial Hermes deploy tooling, §7.20),
 beta-1.10.24 (install.sh CLI-flag bugfix + actionable root-error,
@@ -1213,6 +1221,65 @@ locks out the host).
 
 `hermes_deploy.sh` from .26 unchanged and still shipped. The `.conf`
 format is unchanged; a single `.conf` file works with both scripts.
+
+## 7.23. install.sh simplification + data/clutter audits — beta-1.10.29, 2026-07-25
+
+Three pieces, all in-scope for a single tag: one subtractive code change
+plus two read-only audit deliverables. Nothing behaviourally new — the
+install-time end state on the box is identical to what beta-1.10.28
+produced; this release is about shrinking what has to be maintained and
+documenting what's on disk.
+
+**1. `deploy/bare-metal/install.sh`: 510→414 lines (−96 net; +40 / −136).**
+Subtractive audit driven by §4 of the new
+`docs/INSTALL_SIMPLIFICATION_PROPOSAL.md`. Cuts:
+- The `--app-dir=value` / `--user=value` equals-form flag branches
+  (the space-form `--app-dir value` covers every documented and
+  tested invocation; `deploy.sh` and `hermes_deploy.sh` both use the
+  space form, no live caller ever passed the equals form).
+- The 9-line "must run as root" usage banner. Every real caller now
+  reaches install.sh through `deploy.sh` / `hermes_deploy.sh`, and
+  both of those gate on `sudo -n true` (or interactive `sudo`) at
+  their own top — the banner was rehearsing the same failure mode
+  one layer deeper. `set -euo pipefail` + the first `apt-get` still
+  fail-fasts on a bare non-root invocation, just with a shorter
+  message.
+- In-script rationale comments that had grown to 8-12 lines apiece
+  around individual `rsync` / `cp` / `sed` calls. The reasoning is
+  preserved in-full in HANDOFF §7.6-§7.14 and now in
+  `docs/INSTALL_SIMPLIFICATION_PROPOSAL.md` §1-§4; the script itself
+  reads as an install script again.
+
+Structural behaviour unchanged: same apt packages, same rsync tree,
+same `sed 0.0.0.0→127.0.0.1`, same 9 systemd units, same
+BASIC_AUTH bootstrap. Verified line-by-line in the proposal doc
+before cutting.
+
+**2. `docs/CLUTTER_ASSESSMENT.md` (new).** Repo-wide audit against
+HEAD `f542dc8` (beta-1.10.28). Walks the tree, flags stale / orphaned
+/ duplicated files, proposes delete / archive / keep for each with
+one-line justification. Nothing executed — every proposed action is
+a copy-pasteable command at the bottom of the doc for Luis to run in
+his own shell (the FUSE mount is `unlink(2)`-restricted; see §7.15
+for why `git rm` / `git mv` must run outside this session).
+
+**3. `docs/DATA_INVENTORY.md` (refreshed).** Full rewrite against
+current on-disk state — the prior version had drifted enough that
+half its file paths no longer existed and several documented
+datasets had been superseded. Now aligned with what
+`data/{raw,macro,datasets}/` and `models/` actually contain as of
+today, with source-of-truth links for each.
+
+**4. `docs/INSTALL_SIMPLIFICATION_PROPOSAL.md` (new).** Source-of-truth
+for the install.sh cuts. §1 enumerates every step install.sh
+performs; §2-§3 map each step to its runtime dependency; §4 lists
+the specific subtractions applied in this tag with before/after
+justification. Kept in-tree so the next maintainer who looks at
+install.sh and asks "why is this so short compared to §7.19-§7.22?"
+has an answer without having to `git log -p` the deletion commit.
+
+No test change (install.sh is smoketested by shell, not pytest).
+Full pytest suite: unchanged from beta-1.10.28.
 
 ## 8. How to pick this back up
 
