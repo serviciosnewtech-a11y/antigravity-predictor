@@ -1,0 +1,69 @@
+# hermes_deploy.conf — config for hermes_deploy.sh
+#
+# Copy to hermes_deploy.conf (or any path), fill in the REQUIRED values, then:
+#     sudo bash hermes_deploy.sh /path/to/hermes_deploy.conf
+#
+# Every REQUIRED var must be non-empty or the script fails at preflight.
+# OPTIONAL vars can be left as empty strings — the script degrades gracefully.
+
+# ── REQUIRED ────────────────────────────────────────────────────────────────
+
+# Which release tag are we deploying?
+TAG="beta-1.10.24"
+
+# Absolute path to the bare-metal tarball on THIS host. Must already be present
+# (SCP it in before running this script).
+TARBALL_PATH="/tmp/antigravity-predictor-bare-metal-beta-1.10.24.tar.gz"
+
+# Expected sha256 of the tarball. From releases/antigravity-predictor/<tag>/*.sha256.
+# Preflight verifies this matches before extraction.
+TARBALL_SHA256="e30c53f615f46bbdb49e4acb607e7629ffa001c707251083aacb110f87630369"
+
+# Where the app lives on THIS host. Standard: /opt/predictor.
+# Custom (dev/rehearsal): /home/<user>/antigravity-predictor.
+APP_DIR="/opt/predictor"
+
+# System user that owns the app dir and runs the services. If it doesn't exist,
+# install.sh creates it as a --system user. If it exists (e.g. APP_USER=luis
+# with a real home dir), install.sh leaves it as-is.
+APP_USER="predictor"
+
+# ── OPTIONAL — leave as empty string ("") if not applicable ─────────────────
+
+# Anthropic API key for signal_agent's enrichment path. Only needed if
+# SA_INFERENCE_BACKEND=enabled. Not needed for pure local-relay chat.
+ANTHROPIC_API_KEY=""
+
+# Local CLI-agent invocation for /api/chat. Absolute path, {prompt} placeholder.
+# Example: "/opt/predictor-metis/bin/hermes -z {prompt}"
+# If empty, /api/chat returns 503 until this is set later — that's fine for
+# a first deploy; not a bug.
+# See HANDOFF §4 and deploy/bare-metal/LIVE_DEPLOY_NOTES.md #7 for the traps.
+AGENT_RELAY_CMD=""
+
+# "enabled" or "disabled". Governs whether signal_agent's automated enrichment
+# runs. Requires either ANTHROPIC_API_KEY or a working AGENT_RELAY_CMD.
+SA_INFERENCE_BACKEND="disabled"
+
+# "true" (recommended for internet-exposed hosts) or "false".
+# Note: this var isn't passed through to install.sh yet by hermes_deploy.sh;
+# install.sh reads it from the environment during its own run. Set it in the
+# script call: `ENABLE_BASIC_AUTH=true sudo -E bash hermes_deploy.sh conf`,
+# or trust install.sh's default of true. Default: true.
+ENABLE_BASIC_AUTH="true"
+
+# Off-host backup push command. Leave empty for now (personal cloud not yet
+# chosen per Luis). When set: the sync_offsite.timer will actually push to
+# your remote every 6h. Examples:
+#   OFFSITE_BACKUP_CMD="rclone copy /opt/predictor-backups mydrive:predictor-backups"
+#   OFFSITE_BACKUP_CMD="rsync -av /opt/predictor-backups user@backup-host:/pool/predictor"
+#   OFFSITE_BACKUP_CMD="aws s3 sync /opt/predictor-backups s3://my-bucket/predictor"
+OFFSITE_BACKUP_CMD=""
+
+# HTTPS: domain pointing at this host's public IP. If set, certbot runs after
+# install to acquire + install a Let's Encrypt cert. Leave empty for HTTP-only
+# (fine for local rehearsal, NOT for internet exposure).
+DEPLOY_DOMAIN=""
+
+# Email for certbot registration. Required if DEPLOY_DOMAIN is set.
+LUIS_EMAIL=""

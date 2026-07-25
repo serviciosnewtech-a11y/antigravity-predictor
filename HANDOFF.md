@@ -26,11 +26,12 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.24`.** Cut 2026-07-25 — install.sh
-CLI-flag bugfix + actionable root-error (§7.19). Prior: beta-1.10.23
-(restore playbook + drill, §7.18), beta-1.10.22 (off-host sync stub,
-§7.17), beta-1.10.21 (configstate backup, §7.16), beta-1.10.20 (repo
-housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
+**Latest, current tag: `beta-1.10.25`.** Cut 2026-07-25 — Hermes deploy
+tooling: `hermes_deploy.sh` + `hermes_deploy.conf.example` (§7.20).
+Prior: beta-1.10.24 (install.sh CLI-flag bugfix + actionable root-error,
+§7.19), beta-1.10.23 (restore playbook + drill, §7.18), beta-1.10.22
+(off-host sync stub, §7.17), beta-1.10.21 (configstate backup, §7.16),
+beta-1.10.20 (repo housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
 bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13), beta-1.10.19
 (sidebar scroll discoverability, §7.14). Prior tags in this batch:
 beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10
@@ -1053,15 +1054,65 @@ APP_DIR=/path APP_USER=name sudo -E bash install.sh
 forms with the `sudo -E` gotcha called out — prior version showed only
 the default invocation and would have hit the same trap.
 
+## 7.20. Hermes deploy tooling — beta-1.10.25, 2026-07-25
+
+After a live rehearsal attempt hit the "Hermes stopped at STOP conditions
+because it wasn't root and had no config" wall (see the deploy-report
+Luis relayed), the shape shifted from "prompt Hermes follows step by
+step" to "self-contained script Hermes runs". Two files added to
+`deploy/bare-metal/`, both shipped inside the bare-metal tarball:
+
+- **`hermes_deploy.sh`** — one-shot script. Reads a `.conf` file at
+  `$1`, runs preflight (root check, OS check, disk ≥ 4GB, apt+PyPI
+  reachable, baseline packages including `python3-venv` front-loaded,
+  ports 80/443 free, tarball sha256 verified) → extract → invoke
+  `install.sh` with flag-form or env-form fallback for pre-1.10.24
+  tarballs → populate `.env` from config values → restart services →
+  run 7 verify checks → print fixed-format report. Fails fast with
+  one `[FAIL]` line on any bad state. No prompts, no retries, no
+  interactive branches.
+
+- **`hermes_deploy.conf.example`** — fill-in-the-blanks config with 5
+  REQUIRED vars (`TAG`, `TARBALL_PATH`, `TARBALL_SHA256`, `APP_DIR`,
+  `APP_USER`) and 6 OPTIONAL (`ANTHROPIC_API_KEY`, `AGENT_RELAY_CMD`,
+  `SA_INFERENCE_BACKEND`, `ENABLE_BASIC_AUTH`, `OFFSITE_BACKUP_CMD`,
+  `DEPLOY_DOMAIN`+`LUIS_EMAIL`). Every var has an inline comment on
+  what happens if left empty — the script degrades gracefully rather
+  than crashing on empty optionals.
+
+**Contract with Hermes:** Hermes runs as root on the target VPS, has
+the tarball at `TARBALL_PATH`, has a populated `.conf` file, and
+executes exactly one command:
+
+```
+bash /path/to/hermes_deploy.sh /path/to/deploy.conf
+```
+
+Either the script exits 0 with a `[STATUS] deploy-ok` report block, or
+it exits non-zero with a single `[FAIL]` line naming what went wrong.
+No follow-up decisions for the operator during the run.
+
+**`docs/HERMES_DEPLOY_PROMPT.md` and `docs/REMOTE_DEPLOY_HANDOFF.md`
+are still valid** as narrative/reference for humans reading the
+system, but the actual deploy path is now the script. Prompt and
+handoff describe what the script does; the script is the source of
+truth for what actually runs.
+
+Smoketested locally on the mount (bash -n syntax + all four fail-fast
+paths verified: no-arg → usage, missing-conf-file → usage,
+missing-required-var → names the var, non-root → shows EUID). Not run
+end-to-end against a real VPS from within this session — that's for
+the live rehearsal.
+
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.24`** as of this writing — install.sh
-   CLI-flag bugfix + actionable root-error (§7.19), on top of the
-   restore/backup/off-host chain (§7.15-§7.18: housekeeping, configstate
-   backup, off-host sync stub, restore playbook). Full test suite: 118
-   green. Ignore older references in this doc to "latest is 1.10.9" —
-   those pre-date §7.6 through §7.19. Ignore `beta-1.11` (see §2 for the
-   numbering trap).
+1. **Latest tag is `beta-1.10.25`** as of this writing — Hermes deploy
+   tooling (`hermes_deploy.sh` + `.conf.example`, §7.20) on top of the
+   install.sh CLI-flag fix (§7.19) and the restore/backup/off-host
+   chain (§7.15-§7.18). Full test suite: 118 green (no test change in
+   .25 — script is smoketested by shell, not pytest). Ignore older
+   references in this doc to "latest is 1.10.9" — those pre-date §7.6
+   through §7.20. Ignore `beta-1.11` (see §2 for the numbering trap).
 2. Confirm what state the live host is actually in — don't assume the
    latest tag is deployed just because it's tagged. `git -C /opt/predictor
    rev-parse HEAD` on the live host against `beta-1.10.16`.
