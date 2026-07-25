@@ -26,8 +26,10 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.26`.** Cut 2026-07-25 — simplified
-`hermes_deploy.sh` + tracked `docs/HERMES_DEPLOY_PROMPT.md` (§7.21).
+**Latest, current tag: `beta-1.10.27`.** Cut 2026-07-25 — non-interactive
+`deploy.sh` for Hermes Agent runtime + deploy-blocker issue template
+(§7.22). Prior: beta-1.10.26 (simplified `hermes_deploy.sh` + tracked
+`docs/HERMES_DEPLOY_PROMPT.md`, §7.21).
 Prior: beta-1.10.25 (initial Hermes deploy tooling, §7.20),
 beta-1.10.24 (install.sh CLI-flag bugfix + actionable root-error,
 §7.19), beta-1.10.23 (restore playbook + drill, §7.18), beta-1.10.22
@@ -1126,6 +1128,38 @@ Two changes bundled:
 
 Config file (`hermes_deploy.conf.example`) unchanged — same 5 REQUIRED
 + 6 OPTIONAL vars, existing configs work as-is.
+
+## 7.22. Non-interactive deploy path — beta-1.10.27, 2026-07-25
+
+Trigger: Hermes Agent runtime on NTS1 filed a structured deploy-blocker
+report — cannot invoke `sudo` non-interactively (password prompt would
+hang; password transfer is masked by the Hermes runtime). `install.sh`,
+`ufw`, and `systemctl` all require root; `hermes_deploy.sh` uses `sudo`
+transparently but has no explicit fail-fast if sudo would prompt.
+
+Two additive changes (existing paths unchanged):
+
+1. **`deploy/bare-metal/deploy.sh`** (new). Non-interactive parallel to
+   `hermes_deploy.sh`. Preflight checks `sudo -n true` at the very top
+   and exits with an actionable message if passwordless sudo isn't
+   available — includes the exact `/etc/sudoers.d/hermes-deploy`
+   incantation to fix it, or `sudo -v` for credential-cache. Exports
+   `DEBIAN_FRONTEND=noninteractive` before any apt calls. Tees all
+   output to `/tmp/deploy-<TAG>-<pid>.log`. Fails fast on first error.
+   Pick between the two by runtime:
+   - `hermes_deploy.sh` — interactive-capable operator, sudo can prompt
+   - `deploy.sh` — non-interactive agent (Hermes runtime, CI, cron)
+
+2. **`docs/ISSUE_TEMPLATE/deploy-blocker.md`** (new). Structured
+   template for deploy runners to file blocker reports. Sections:
+   Context, Blockers, What was verified anyway, Requested changes,
+   Constraints, Environment info dump. Path is per Luis's spec; note
+   that GitHub's UI auto-loads templates from `.github/ISSUE_TEMPLATE/`
+   — if UI integration is wanted, symlink or move under `.github/`
+   later (deferred, not urgent).
+
+`hermes_deploy.sh` from .26 unchanged and still shipped. The `.conf`
+format is unchanged; a single `.conf` file works with both scripts.
 
 ## 8. How to pick this back up
 
