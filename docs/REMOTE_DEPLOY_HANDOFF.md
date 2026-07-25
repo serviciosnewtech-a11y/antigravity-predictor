@@ -14,6 +14,26 @@ deploy artifact — no `git clone` on the VPS, no fetching from GitHub.
 
 ---
 
+## Non-interactive execution (Hermes Agent runtime)
+
+If the runner is Hermes (or any non-interactive agent), use `deploy.sh`
+instead of `install.sh` directly. It requires passwordless sudo already
+set up — see `docs/DEPLOY_NONINTERACTIVE.md` for the one-time
+`/etc/sudoers.d/hermes-deploy` setup.
+
+**Paste-ready root-shell block** (writes all output to /tmp so it survives
+terminal close):
+
+```bash
+export DEBIAN_FRONTEND=noninteractive
+export CONF=~/deploy.conf
+TAG=$(grep '^TAG=' $CONF | cut -d= -f2 | tr -d '"')
+TARBALL=$(grep '^TARBALL_PATH=' $CONF | cut -d= -f2 | tr -d '"')
+tar -xzf $TARBALL -C /tmp
+bash /tmp/antigravity-predictor-bare-metal-$TAG/deploy/bare-metal/deploy.sh $CONF
+# After: cat /tmp/deploy-$TAG-report.txt
+```
+
 ## TL;DR
 
 1. Verify `.env` decisions with Luis before starting (below).

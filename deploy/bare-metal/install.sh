@@ -351,6 +351,11 @@ log "Services enabled."
 # for a purely local/VPN-only install that doesn't want a password wall).
 # Idempotent: leaves an existing /etc/nginx/.htpasswd alone on a rerun
 # rather than silently rotating credentials shared testers already have.
+# ENABLE_BASIC_AUTH is read from the environment. deploy.sh passes it
+# through via `env ENABLE_BASIC_AUTH=... sudo bash install.sh ...` so it
+# survives the sudo boundary. Default is "true" — the auth wall is the only
+# thing standing between an internet-exposed nginx and open dashboard access.
+# Set to "false" ONLY for a local/VPN-only install with no external reach.
 ENABLE_BASIC_AUTH="${ENABLE_BASIC_AUTH:-true}"
 HTPASSWD_FILE=/etc/nginx/.htpasswd
 if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
@@ -358,6 +363,9 @@ if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
         BASIC_AUTH_USER="${BASIC_AUTH_USER:-predictor}"
         BASIC_AUTH_PASS="${BASIC_AUTH_PASS:-$(openssl rand -base64 18 | tr -d '=+/' | head -c 20)}"
         htpasswd -cb "$HTPASSWD_FILE" "$BASIC_AUTH_USER" "$BASIC_AUTH_PASS" >/dev/null
+        # Parseable form for automated deploy scripts (deploy.sh greps for this exact line).
+        # Also print the human-friendly form for interactive operators.
+        echo "[BASIC_AUTH] user=$BASIC_AUTH_USER password=$BASIC_AUTH_PASS"
         log "Basic auth enabled — user: $BASIC_AUTH_USER  password: $BASIC_AUTH_PASS"
         log "  (save this now — it is only printed once; rotate later with: htpasswd $HTPASSWD_FILE $BASIC_AUTH_USER)"
     else

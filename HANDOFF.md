@@ -26,7 +26,7 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.27`.** Cut 2026-07-25 — non-interactive
+**Latest, current tag: `beta-1.10.28`.** Cut 2026-07-25 — non-interactive
 `deploy.sh` for Hermes Agent runtime + deploy-blocker issue template
 (§7.22). Prior: beta-1.10.26 (simplified `hermes_deploy.sh` + tracked
 `docs/HERMES_DEPLOY_PROMPT.md`, §7.21).
@@ -1129,7 +1129,7 @@ Two changes bundled:
 Config file (`hermes_deploy.conf.example`) unchanged — same 5 REQUIRED
 + 6 OPTIONAL vars, existing configs work as-is.
 
-## 7.22. Non-interactive deploy path — beta-1.10.27, 2026-07-25
+## 7.22. Non-interactive deploy path + rollback + verify + report/parseable-auth — beta-1.10.28, 2026-07-25
 
 Trigger: Hermes Agent runtime on NTS1 filed a structured deploy-blocker
 report — cannot invoke `sudo` non-interactively (password prompt would
@@ -1137,26 +1137,79 @@ hang; password transfer is masked by the Hermes runtime). `install.sh`,
 `ufw`, and `systemctl` all require root; `hermes_deploy.sh` uses `sudo`
 transparently but has no explicit fail-fast if sudo would prompt.
 
-Two additive changes (existing paths unchanged):
+Six additive changes (existing paths unchanged):
 
 1. **`deploy/bare-metal/deploy.sh`** (new). Non-interactive parallel to
    `hermes_deploy.sh`. Preflight checks `sudo -n true` at the very top
    and exits with an actionable message if passwordless sudo isn't
    available — includes the exact `/etc/sudoers.d/hermes-deploy`
    incantation to fix it, or `sudo -v` for credential-cache. Exports
-   `DEBIAN_FRONTEND=noninteractive` before any apt calls. Tees all
+   `DEBIAN_FRONTEND=noninteractive` before any apt calls. Verifies
+   `TARBALL_SHA256` (if set in config) before extraction. Passes
+   `ENABLE_BASIC_AUTH` through to install.sh via env var. Tees all
    output to `/tmp/deploy-<TAG>-<pid>.log`. Fails fast on first error.
    Pick between the two by runtime:
    - `hermes_deploy.sh` — interactive-capable operator, sudo can prompt
    - `deploy.sh` — non-interactive agent (Hermes runtime, CI, cron)
 
-2. **`docs/ISSUE_TEMPLATE/deploy-blocker.md`** (new). Structured
-   template for deploy runners to file blocker reports. Sections:
-   Context, Blockers, What was verified anyway, Requested changes,
-   Constraints, Environment info dump. Path is per Luis's spec; note
-   that GitHub's UI auto-loads templates from `.github/ISSUE_TEMPLATE/`
-   — if UI integration is wanted, symlink or move under `.github/`
-   later (deferred, not urgent).
+2. **`deploy/bare-metal/rollback.sh`** (new). Undoes an install:
+   stops+disables all services and timers, removes systemd unit files,
+   `rm -rf $APP_DIR`. Preserves `<APP_DIR>-backups`, `<APP_DIR>-forge-
+   scorecard`, and `/etc/nginx/.htpasswd` by default (the whole point
+   of durable backups is surviving a rollback). Pass `--purge-data` as
+   second arg to also remove those. Nginx site config left alone
+   regardless — operator may host other sites. Same non-interactive
+   sudo preflight as deploy.sh.
+
+3. **`deploy/bare-metal/verify.sh`** (new). Standalone version of the
+   7-check verification block that used to live inside the .25
+   `hermes_deploy.sh` Phase 3. Runnable any time after a deploy: no
+   install, no changes, just PASS/FAIL/SKIP per check. Exit code is
+   number of failures (0 = all pass). Useful after a manual poke to
+   confirm state, or after a rollback+redeploy to confirm parity.
+
+4. **`docs/ISSUE_TEMPLATE/deploy-blocker.md`** (new). Structured
+   template for deploy runners to file blocker reports with specific
+   fields: runtime context (host/OS/tag/script/executor), sudo state
+   (EUID, `sudo -n` exit, NOPASSWD sudoers presence), environment
+   probes (disk/ports/prior /tmp artifacts/last log path), blockers,
+   requested changes, constraints, full environment dump. Path per
+   Luis's spec; symlink to `.github/ISSUE_TEMPLATE/` later for GitHub
+   UI integration.
+
+5. **`docs/DEPLOY_NONINTERACTIVE.md`** (new). Hermes-friendly deploy
+   guide. Documents the one-time `/etc/sudoers.d/hermes-deploy`
+   NOPASSWD setup (the ONLY sustainable non-interactive path — the
+   install genuinely needs root and there's no way around that
+   without a much larger rearchitecture). Includes a paste-ready
+   root-shell block that tees all output to `/tmp` so the operator
+   can walk away — the report at `/tmp/deploy-<TAG>-report.txt`
+   survives terminal close. Also covers standalone `verify.sh` +
+   `rollback.sh` usage with flag examples.
+
+6. **`install.sh` amendments**: (a) machine-parseable BASIC_AUTH
+   line added to the log — `[BASIC_AUTH] user=<U> password=<P>` — in
+   addition to the existing human-friendly line, so `deploy.sh` can
+   grep it out reliably. (b) `ENABLE_BASIC_AUTH` env-var default
+   block now has a comment explaining how `deploy.sh` passes it
+   through the sudo boundary (via `env ENABLE_BASIC_AUTH=... sudo
+   bash install.sh ...`).
+
+`deploy.sh` amendments in this revision:
+- Port 80/443 preflight (fail-fast, no wait)
+- TARBALL_SHA256 verification before extraction (skipped with warn
+  if config doesn't set it — for local dev iteration)
+- Structured report file at `/tmp/deploy-<TAG>-report.txt` that
+  survives terminal close (Hermes reads it after the fact)
+- On failure, captures the last 30 lines of the install.sh log
+  into the report so triage doesn't need SSH re-entry
+- Full Phase 3 verification delegated to `verify.sh` (all 7 checks
+  run, failures counted, exit code reflects them)
+
+`rollback.sh` split its single `--purge-data` flag into three
+separately-passable flags: `--wipe-backups`, `--wipe-htpasswd`,
+`--wipe-ufw` (SSH allow rule always preserved regardless — losing it
+locks out the host).
 
 `hermes_deploy.sh` from .26 unchanged and still shipped. The `.conf`
 format is unchanged; a single `.conf` file works with both scripts.

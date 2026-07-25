@@ -5,46 +5,46 @@ title: "[DEPLOY-BLOCKER] "
 labels: deploy, blocker
 ---
 
-## Context
+## Runtime context (fill in ALL fields — one blank field wastes a triage round)
 
-- **Target host:** (hostname, OS, version — e.g. NTS1, Linux Mint 22.3 Ubuntu Noble-based)
-- **Repo:** https://github.com/serviciosnewtech-a11y/antigravity-predictor.git
-- **Tag being deployed:** (e.g. `beta-1.10.27`)
-- **Deploy runner:** (Hermes Agent / manual operator / CI job)
-- **Script attempted:** (`install.sh` / `hermes_deploy.sh` / `deploy.sh`)
+- **host:** (hostname)
+- **OS:** (`lsb_release -a` one-liner, e.g. `Linux Mint 22.3 (Ubuntu Noble)`)
+- **repo tag being deployed:** (e.g. `beta-1.10.27`)
+- **script attempted:** (`install.sh` | `hermes_deploy.sh` | `deploy.sh` | `verify.sh` | `rollback.sh`)
+- **executor role:** (`hermes` | `ci` | `manual-operator`)
 
-## Blockers
+## Sudo state (the #1 root cause of deploy blockers)
+
+- **EUID at invocation:** (`echo $EUID` — 0 means root, else the user's uid)
+- **`sudo -n true` exit code:** (`sudo -n true; echo $?` — 0 = passwordless sudo works)
+- **NOPASSWD sudoers.d entry present:** (`ls /etc/sudoers.d/ | grep -i hermes || echo none`)
+
+## Environment probes
+
+- **disk free at `$APP_DIR` parent:** (`df -h $(dirname $APP_DIR) | tail -1`)
+- **ports 80/443 status:** (`ss -ltn | grep -E ':(80|443)\b' || echo free`)
+- **prior artifacts in /tmp:** (`ls /tmp/deploy-*.log /tmp/install-*.log /tmp/deploy-*-report.txt 2>/dev/null || echo none`)
+- **last log path** (if the runner produced one): (e.g. `/tmp/deploy-beta-1.10.27-12345.log`)
+
+## Blocker(s)
 
 Number each. For each: what happened, what was tried, why it failed.
 
 1.
 2.
 
-## What was verified anyway
-
-Environmental facts confirmed BEFORE the blocker fired. Helps triage.
-
-- OS check:
-- Disk free:
-- Ports 80/443 status:
-- Sudo available:
-- Tarball present + sha256 match:
-
-## Requested changes
-
-If the fix requires code/doc changes, list them here with rationale.
+## Requested changes (if any code/doc changes needed)
 
 A.
 B.
-C.
 
-## Constraints for the fix
+## Constraints on the fix
 
-- [ ] Do NOT change the existing shipped install path (`install.sh`, `hermes_deploy.sh`) — backward compat is required.
+- [ ] Do NOT change the existing shipped install path (`install.sh`, `hermes_deploy.sh`) — backward compat required.
 - [ ] Preflight failures should surface with a single actionable message, not a stack of retries.
-- [ ] New scripts should be additive; parallel to existing paths, not replacements.
+- [ ] New scripts should be additive; parallel to existing paths.
 
-## Environment info dump
+## Full environment dump (paste output)
 
 ```
 uname -a:
@@ -52,4 +52,5 @@ lsb_release -a:
 free -h:
 df -h:
 sudo -n true 2>&1; echo "sudo -n exit: $?"
+id:
 ```
