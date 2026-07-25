@@ -1,21 +1,64 @@
 #!/usr/bin/env bash
 # =============================================================================
-# install.sh — Deploy Antigravity Predictor on a fresh Ubuntu 22.04 VPS
+# install.sh — Deploy Antigravity Predictor on a fresh Ubuntu 22.04 host
 #
-# Run as root:
-#   bash install.sh [--app-dir /opt/predictor] [--user predictor]
+# Two equivalent invocations (either flags or env vars, matching values):
+#
+#   sudo bash install.sh [--app-dir /opt/predictor] [--user predictor]
+#
+#   APP_DIR=/opt/predictor APP_USER=predictor sudo -E bash install.sh
+#
+# Flags OVERRIDE env vars if both are set (CLI-wins). Defaults: /opt/predictor
+# and 'predictor'. If APP_USER doesn't exist, it's created as a system user;
+# if it already exists (e.g. a custom install into a real user's home dir),
+# it's used as-is with no re-creation. --help prints usage and exits.
 # =============================================================================
 
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/predictor}"
 APP_USER="${APP_USER:-predictor}"
+
+# CLI flag parsing (bugfix beta-1.10.24 — prior versions silently ignored
+# flags shown in the usage comment, an active trap for anyone following the
+# advertised interface). Any unrecognised arg is a hard error rather than
+# silently accepted, matching bash's own convention for --unknown flags.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --app-dir)  APP_DIR="$2";  shift 2 ;;
+        --user)     APP_USER="$2"; shift 2 ;;
+        --app-dir=*) APP_DIR="${1#*=}";  shift ;;
+        --user=*)    APP_USER="${1#*=}"; shift ;;
+        -h|--help)
+            sed -n '2,15p' "$0" | sed 's|^# \?||'
+            exit 0 ;;
+        *)  echo "[ERROR] Unknown argument: $1" >&2
+            echo "        Run '$0 --help' for usage." >&2
+            exit 2 ;;
+    esac
+done
+
 REPO_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 log() { echo "[INSTALL] $*"; }
 die() { echo "[ERROR] $*"; exit 1; }
 
-[[ $EUID -eq 0 ]] || die "Run as root."
+# Actionable error: the install genuinely needs root (apt-get, /etc/systemd,
+# /etc/nginx, ufw). There is no non-sudo fallback -- attempting one would
+# fail deeper into the script at the first apt call. Point at the two
+# working invocations so the operator doesn't retry the same wrong thing.
+if [[ $EUID -ne 0 ]]; then
+    echo "[ERROR] install.sh must run as root. This is not optional -- the script"    >&2
+    echo "        installs apt packages, writes systemd units and nginx config,"      >&2
+    echo "        and configures ufw. Re-run with one of:"                            >&2
+    echo ""                                                                            >&2
+    echo "          sudo bash $0 --app-dir <path> --user <name>"                      >&2
+    echo "          APP_DIR=<path> APP_USER=<name> sudo -E bash $0"                   >&2
+    echo ""                                                                            >&2
+    echo "        The -E on the second form preserves your env vars through sudo;"    >&2
+    echo "        without it, APP_DIR/APP_USER get reset to defaults inside sudo."    >&2
+    exit 1
+fi
 
 # ── System deps ───────────────────────────────────────────────────────────────
 log "Installing system packages…"

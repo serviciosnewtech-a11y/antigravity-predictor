@@ -26,10 +26,11 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.23`.** Cut 2026-07-24 — restore
-playbook + `tools/restore_from_backup.sh` + drill (§7.18). Prior:
-`beta-1.10.22` (off-host sync stub, §7.17), `beta-1.10.21` (configstate
-backup, §7.16), `beta-1.10.20` (repo housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
+**Latest, current tag: `beta-1.10.24`.** Cut 2026-07-25 — install.sh
+CLI-flag bugfix + actionable root-error (§7.19). Prior: beta-1.10.23
+(restore playbook + drill, §7.18), beta-1.10.22 (off-host sync stub,
+§7.17), beta-1.10.21 (configstate backup, §7.16), beta-1.10.20 (repo
+housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
 bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13), beta-1.10.19
 (sidebar scroll discoverability, §7.14). Prior tags in this batch:
 beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10
@@ -1016,15 +1017,51 @@ restore chain: 90 (pre-chain) -> 98 (backup) -> 109 (off-host) -> 118
   pipeline (`retrain_all.sh`), covered elsewhere and out of scope for a
   restore-from-backup runbook.
 
+## 7.19. install.sh CLI parsing + root-error fix — beta-1.10.24, 2026-07-25
+
+Two real bugs found in `deploy/bare-metal/install.sh` when Luis tried the
+first local-machine rehearsal (targeting `/home/luis/antigravity-predictor`
+as user `luis`, not the default `/opt/predictor` + `predictor`):
+
+1. **`--app-dir` / `--user` were documented but silently ignored.** The
+   script's docstring (line 6) advertised both flags. The code (lines
+   11-12) only ever read `APP_DIR`/`APP_USER` from env. There was zero
+   argument parsing — no `getopts`, no `case $1`, no `shift`. Passing
+   the advertised flags became unused positional args, defaults won.
+   Anyone following the interface got a stealth install into
+   `/opt/predictor` regardless of what they typed. Fixed: proper
+   `case`/`shift` loop supporting both `--flag value` and `--flag=value`
+   forms, unknown args are hard-error (exit 2), `-h`/`--help` prints
+   usage and exits 0.
+
+2. **Root check gave no direction.** Line 18 was `[[ $EUID -eq 0 ]] ||
+   die "Run as root."` — one liner, no fallback branch, no hint at HOW
+   to re-run. Deliberately kept no-non-sudo-fallback (the install
+   genuinely needs root for apt-get, /etc/systemd, /etc/nginx, ufw —
+   adding a fallback would fail deeper in the script), but the error
+   message now shows both working invocations verbatim and calls out
+   the `sudo -E` env-preservation trap explicitly.
+
+**Working invocations after this fix** (either works, flags CLI-win over env):
+
+```
+sudo bash install.sh --app-dir /path --user name
+APP_DIR=/path APP_USER=name sudo -E bash install.sh
+```
+
+**Also updated:** `docs/REMOTE_DEPLOY_HANDOFF.md`'s Step 3 now shows both
+forms with the `sudo -E` gotcha called out — prior version showed only
+the default invocation and would have hit the same trap.
+
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.23`** as of this writing — restore
-   playbook + `tools/restore_from_backup.sh` + end-to-end drill
-   (§7.18), on top of the backup/off-host chain
-   (§7.15/7.16/7.17: repo housekeeping, configstate backup, off-host
-   sync stub). Full test suite: 118 green. Ignore the older references in
-   this doc to "latest is 1.10.9" — those pre-date §7.6 through §7.15.
-   Ignore `beta-1.11` (see §2 for the numbering trap).
+1. **Latest tag is `beta-1.10.24`** as of this writing — install.sh
+   CLI-flag bugfix + actionable root-error (§7.19), on top of the
+   restore/backup/off-host chain (§7.15-§7.18: housekeeping, configstate
+   backup, off-host sync stub, restore playbook). Full test suite: 118
+   green. Ignore older references in this doc to "latest is 1.10.9" —
+   those pre-date §7.6 through §7.19. Ignore `beta-1.11` (see §2 for the
+   numbering trap).
 2. Confirm what state the live host is actually in — don't assume the
    latest tag is deployed just because it's tagged. `git -C /opt/predictor
    rev-parse HEAD` on the live host against `beta-1.10.16`.
