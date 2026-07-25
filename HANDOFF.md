@@ -26,9 +26,10 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.25`.** Cut 2026-07-25 — Hermes deploy
-tooling: `hermes_deploy.sh` + `hermes_deploy.conf.example` (§7.20).
-Prior: beta-1.10.24 (install.sh CLI-flag bugfix + actionable root-error,
+**Latest, current tag: `beta-1.10.26`.** Cut 2026-07-25 — simplified
+`hermes_deploy.sh` + tracked `docs/HERMES_DEPLOY_PROMPT.md` (§7.21).
+Prior: beta-1.10.25 (initial Hermes deploy tooling, §7.20),
+beta-1.10.24 (install.sh CLI-flag bugfix + actionable root-error,
 §7.19), beta-1.10.23 (restore playbook + drill, §7.18), beta-1.10.22
 (off-host sync stub, §7.17), beta-1.10.21 (configstate backup, §7.16),
 beta-1.10.20 (repo housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
@@ -1103,6 +1104,28 @@ paths verified: no-arg → usage, missing-conf-file → usage,
 missing-required-var → names the var, non-root → shows EUID). Not run
 end-to-end against a real VPS from within this session — that's for
 the live rehearsal.
+
+## 7.21. Simplified hermes_deploy.sh + tracked prompt doc — beta-1.10.26, 2026-07-25
+
+Two changes bundled:
+
+1. **`deploy/bare-metal/hermes_deploy.sh` simplified from ~200 → ~50
+   lines.** The .25 version was over-engineered — preflight paranoia
+   (root check, OS check, disk, network, port availability, tarball
+   sha256, 7-check verify phase) that duplicated install.sh or fail-
+   fast-broke deploys on machines where Hermes isn't resident as root.
+   Simplified to do only what install.sh doesn't: extract tarball,
+   invoke install.sh with flags, populate .env, restart services,
+   print basic-auth password + service status. Uses `sudo`
+   transparently when EUID != 0 instead of hard-failing on non-root.
+
+2. **`docs/HERMES_DEPLOY_PROMPT.md` now tracked.** Was left untracked
+   in .25 for follow-up; this is the follow-up. Narrative/reference
+   version of what the script does, for humans wanting to understand
+   the deploy contract without reading the shell.
+
+Config file (`hermes_deploy.conf.example`) unchanged — same 5 REQUIRED
++ 6 OPTIONAL vars, existing configs work as-is.
 
 ## 8. How to pick this back up
 
