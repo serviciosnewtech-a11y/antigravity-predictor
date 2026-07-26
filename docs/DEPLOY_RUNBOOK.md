@@ -27,7 +27,7 @@ export TARBALL=$HOME/antigravity-predictor-v1.11.1-dacb3bc.tar.gz
 From this workstation:
 
 ```bash
-D=/media/hermes/Storage/git/antigravity-predictor/dist
+D=<repo_root>/dist
 scp $D/antigravity-predictor-v1.11.1-dacb3bc.tar.gz \
     $D/antigravity-predictor-v1.11.1-dacb3bc.tar.gz.sha256 \
     USER@TARGET:~/

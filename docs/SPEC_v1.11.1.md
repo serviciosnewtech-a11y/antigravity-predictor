@@ -75,7 +75,7 @@ string; no distinct Stage 1 load path exists.
 
 The working tree at `antigravity-predictor-beta-1.10.32-clean/` is **not a git repository**.
 `git tag -l v1.11.0` returns nothing. `CHANGELOG.md` does not exist in
-`/media/hermes/Storage/git/antigravity-predictor` at any commit. HEAD there remains
+`<repo_root>` at any commit. HEAD there remains
 `59936dd beta-1.10.32`. The entire v1.11.0 body of work is an uncommitted file overlay,
 in direct violation of the governance rule "all changes originate as repo commits."
 
@@ -134,7 +134,7 @@ each packet must be completable without judgment calls. **Stop at each gate.**
 
 ### PACKET A — Quarantine (no analysis, pure bookkeeping)
 **A1.** Create git repo state for the overlay. In
-`/media/hermes/Storage/git/antigravity-predictor`, create branch `quarantine/v1.11.0`.
+`<repo_root>`, create branch `quarantine/v1.11.0`.
 Copy in the four overlay-modified files (`CHANGELOG.md`, `config.json`,
 `src/lgbm_poc/labels.py`, `src/predictor_server.py`) and `models/*.txt` from
 `antigravity-predictor-beta-1.10.32-clean/`. Commit with message
@@ -150,7 +150,7 @@ returns the branch; `main`/HEAD still at `59936dd`; nothing deleted from disk.
 
 ### PACKET B — Data inventory (read-only, emits a report)
 **B1.** Write `tools/audit_data_inventory.py`. For every parquet in
-`/media/hermes/Storage/git/antigravity-predictor/.retrain_cache/`, emit to
+`<repo_root>/.retrain_cache/`, emit to
 `reports/data_inventory.json`: file path, row count, first and last timestamp, column
 list, count of `close[t+2] == close[t]` tie bars, and the base rate of
 `label_direction_2bar`.

@@ -14,7 +14,7 @@ would fail at runtime or silently produce a worthless artifact — not a disagre
 ## BLOCKERS — Packet A will fail as written
 
 ### R-1 — Stale `.git/index.lock` will abort every git command
-`/media/hermes/Storage/git/antigravity-predictor/.git/index.lock` exists, 0 bytes,
+`<repo_root>/.git/index.lock` exists, 0 bytes,
 created 2026-07-26 12:27. **This is my fault** — my earlier read-only audit ran `git status`
 from a sandbox that could not clean up after itself.
 
@@ -23,7 +23,7 @@ Every git operation in Packet A will fail with
 
 **Required first step of A1:**
 ```bash
-R=/media/hermes/Storage/git/antigravity-predictor
+R=<repo_root>
 # confirm no git process is running, THEN:
 rm -f $R/.git/index.lock
 git -C $R status   # must succeed before proceeding
@@ -66,7 +66,7 @@ A1 says "commit the 4 overlay files" without stating where they come from. They 
 the git repo. Canonical source, to be stated literally in the task:
 
 ```
-/media/hermes/Storage/agents/default/workspace/antigravity-predictor-beta-1.10.32-clean/antigravity-predictor-bare-metal-beta-1.10.32/
+<workspace_root>/
   ├── CHANGELOG.md
   ├── config.json
   ├── src/lgbm_poc/labels.py
