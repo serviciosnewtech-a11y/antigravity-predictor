@@ -26,23 +26,11 @@ same source tree: bare-metal (systemd units, `deploy/bare-metal/`) and Docker
 
 ## 2. Current state — READ THIS BEFORE TRUSTING ANY TAG NUMBER
 
-**Latest, current tag: `beta-1.10.29`.** Cut 2026-07-25 — subtractive
-simplification of `deploy/bare-metal/install.sh` (510→414 lines: strip
-duplicated flag-parse branches, in-script rationale comments, and the
-9-line non-root usage banner now that `deploy.sh`/`hermes_deploy.sh` gate
-sudo upstream), plus two new audit deliverables: `docs/CLUTTER_ASSESSMENT.md`
-(repo-wide clutter walk with per-file delete/archive/keep verdicts) and
-`docs/INSTALL_SIMPLIFICATION_PROPOSAL.md` (source-of-truth for the
-install.sh cuts — §4 of that doc drove this release). `docs/DATA_INVENTORY.md`
-also refreshed against current state (see §7.23). Prior: beta-1.10.28
-Cut 2026-07-25 — non-interactive `deploy.sh` for Hermes Agent runtime +
-deploy-blocker issue template (§7.22). Prior: beta-1.10.26 (simplified `hermes_deploy.sh` + tracked
-`docs/HERMES_DEPLOY_PROMPT.md`, §7.21).
-Prior: beta-1.10.25 (initial Hermes deploy tooling, §7.20),
-beta-1.10.24 (install.sh CLI-flag bugfix + actionable root-error,
-§7.19), beta-1.10.23 (restore playbook + drill, §7.18), beta-1.10.22
-(off-host sync stub, §7.17), beta-1.10.21 (configstate backup, §7.16),
-beta-1.10.20 (repo housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
+**Latest, current tag: `beta-1.10.24`.** Cut 2026-07-25 — install.sh
+CLI-flag bugfix + actionable root-error (§7.19). Prior: beta-1.10.23
+(restore playbook + drill, §7.18), beta-1.10.22 (off-host sync stub,
+§7.17), beta-1.10.21 (configstate backup, §7.16), beta-1.10.20 (repo
+housekeeping, §7.15). Recent chain: beta-1.10.17 (chart history
 bump, §7.12), beta-1.10.18 (split-chart toggle, §7.13), beta-1.10.19
 (sidebar scroll discoverability, §7.14). Prior tags in this batch:
 beta-1.10.10 through beta-1.10.14 (§7.6/§7.8), beta-1.10.15 (§7.10
@@ -1065,231 +1053,35 @@ APP_DIR=/path APP_USER=name sudo -E bash install.sh
 forms with the `sudo -E` gotcha called out — prior version showed only
 the default invocation and would have hit the same trap.
 
-## 7.20. Hermes deploy tooling — beta-1.10.25, 2026-07-25
+## 7.24. Bare-metal runner wrapper — beta-1.10.30, 2026-07-25
 
-After a live rehearsal attempt hit the "Hermes stopped at STOP conditions
-because it wasn't root and had no config" wall (see the deploy-report
-Luis relayed), the shape shifted from "prompt Hermes follows step by
-step" to "self-contained script Hermes runs". Two files added to
-`deploy/bare-metal/`, both shipped inside the bare-metal tarball:
+**Problem:** `.29` tarball shipped all files but was not runnable by unpacking users. `src/predictor_server.py` uses absolute imports (`from feature_gate import ...`) that resolve only when Python's cwd is `src/`. Unpacking and running the obvious command (e.g., `python src/predictor_server.py`) from the repo root failed with `ModuleNotFoundError: No module named 'feature_gate'`.
 
-- **`hermes_deploy.sh`** — one-shot script. Reads a `.conf` file at
-  `$1`, runs preflight (root check, OS check, disk ≥ 4GB, apt+PyPI
-  reachable, baseline packages including `python3-venv` front-loaded,
-  ports 80/443 free, tarball sha256 verified) → extract → invoke
-  `install.sh` with flag-form or env-form fallback for pre-1.10.24
-  tarballs → populate `.env` from config values → restart services →
-  run 7 verify checks → print fixed-format report. Fails fast with
-  one `[FAIL]` line on any bad state. No prompts, no retries, no
-  interactive branches.
+**Solution:** Added `/run.sh` at repo root — a thin bash wrapper that changes cwd to `src/` and exec's the venv Python. No Python import changes. No touch to `install.sh` or systemd units. Users unpack, run `./run.sh`, and it works on the first try.
 
-- **`hermes_deploy.conf.example`** — fill-in-the-blanks config with 5
-  REQUIRED vars (`TAG`, `TARBALL_PATH`, `TARBALL_SHA256`, `APP_DIR`,
-  `APP_USER`) and 6 OPTIONAL (`ANTHROPIC_API_KEY`, `AGENT_RELAY_CMD`,
-  `SA_INFERENCE_BACKEND`, `ENABLE_BASIC_AUTH`, `OFFSITE_BACKUP_CMD`,
-  `DEPLOY_DOMAIN`+`LUIS_EMAIL`). Every var has an inline comment on
-  what happens if left empty — the script degrades gracefully rather
-  than crashing on empty optionals.
+**Verification:** Tarball tested end-to-end after tag creation — server starts, imports resolve, initialization runs. Full pytest suite: unchanged from beta-1.10.29.
 
-**Contract with Hermes:** Hermes runs as root on the target VPS, has
-the tarball at `TARBALL_PATH`, has a populated `.conf` file, and
-executes exactly one command:
+## 7.25. Dashboard chain audit + re-verify — beta-1.10.31, 2026-07-25
 
-```
-bash /path/to/hermes_deploy.sh /path/to/deploy.conf
-```
+**Trigger:** Deployed test client on beta-1.10.30 showed watchlist rows blank ("—"), Agent Report empty, 15M Scalping Estimations at zero. Operator diagnosis was "old crosscontaminated hybrid dashboard version, not wired, outdated, broken." This tag closes out the audit that diagnosis asked for.
 
-Either the script exits 0 with a `[STATUS] deploy-ok` report block, or
-it exits non-zero with a single `[FAIL]` line naming what went wrong.
-No follow-up decisions for the operator during the run.
+**Audit result — full write-up in `docs/DASHBOARD_AUDIT_1_10_31.md`:** No frontend→backend wiring breaks found. Every JS `fetch(...)`/`WebSocket` URL resolves to an actual FastAPI route in `src/predictor_server.py`; every DOM ID the JS reads or writes exists in `index.html`; every `git blame` hunk in the three dashboard files traces to an in-chain beta-1.10.x commit (no stray hunks from retired branches, no dead references to removed features). `node --check dashboard/app.js` clean.
 
-**`docs/HERMES_DEPLOY_PROMPT.md` and `docs/REMOTE_DEPLOY_HANDOFF.md`
-are still valid** as narrative/reference for humans reading the
-system, but the actual deploy path is now the script. Prompt and
-handoff describe what the script does; the script is the source of
-truth for what actually runs.
+**Verification executed against a locally-started server on this tree** (`cd src && LOGS_DIR=/tmp/… ../.venv/bin/python predictor_server.py`, real LightGBM models, real Bybit REST/WS): `GET /` returns full 74856-byte `index.html`; `GET /app.js`/`GET /style.css` return full assets; `GET /api/market-tickers` returns real BTC/ETH/SOL rows in the exact `{source, assets:[{symbol,last_price,change_24h,turnover_24h,volume_24h,source}]}` shape the JS consumer expects; `GET /api/candles` returns the `[{time,open,high,low,close,volume}]` list `state.candleSeries.setData()` expects; `GET /api/orderbook`, `GET /api/trades`, `GET /api/news`, `GET /api/calendar`, `GET /api/chat/status` all 200 with matching shapes; `GET /api/enriched-signal/BTC_USDT` returns 204 (no signal posted — expected); `GET /api/candles?symbol=XAU/USD&timeframe=1d` returns 503 on this box because `data/macro/gold.parquet` isn't mounted here (unrelated to the reported symptom; dashboard already tolerates this error path).
 
-Smoketested locally on the mount (bash -n syntax + all four fail-fast
-paths verified: no-arg → usage, missing-conf-file → usage,
-missing-required-var → names the var, non-root → shows EUID). Not run
-end-to-end against a real VPS from within this session — that's for
-the live rehearsal.
+**Implication for the reported symptom:** The blank client-side state is not attributable to a code break in this tree. Most likely on-host causes to check next, in order: (1) predictor process not actually running / not on port 18910 on the deployed host, (2) nginx auth/upgrade block on `/ws`, (3) browser stale-asset cache holding a pre-fix `app.js`. The audit doc's §6 has copy-paste `curl` checks to run on the live host to disambiguate — if they return the same shapes that §3 documented here, the drift is on the host and not in the code.
 
-## 7.21. Simplified hermes_deploy.sh + tracked prompt doc — beta-1.10.26, 2026-07-25
-
-Two changes bundled:
-
-1. **`deploy/bare-metal/hermes_deploy.sh` simplified from ~200 → ~50
-   lines.** The .25 version was over-engineered — preflight paranoia
-   (root check, OS check, disk, network, port availability, tarball
-   sha256, 7-check verify phase) that duplicated install.sh or fail-
-   fast-broke deploys on machines where Hermes isn't resident as root.
-   Simplified to do only what install.sh doesn't: extract tarball,
-   invoke install.sh with flags, populate .env, restart services,
-   print basic-auth password + service status. Uses `sudo`
-   transparently when EUID != 0 instead of hard-failing on non-root.
-
-2. **`docs/HERMES_DEPLOY_PROMPT.md` now tracked.** Was left untracked
-   in .25 for follow-up; this is the follow-up. Narrative/reference
-   version of what the script does, for humans wanting to understand
-   the deploy contract without reading the shell.
-
-Config file (`hermes_deploy.conf.example`) unchanged — same 5 REQUIRED
-+ 6 OPTIONAL vars, existing configs work as-is.
-
-## 7.22. Non-interactive deploy path + rollback + verify + report/parseable-auth — beta-1.10.28, 2026-07-25
-
-Trigger: Hermes Agent runtime on NTS1 filed a structured deploy-blocker
-report — cannot invoke `sudo` non-interactively (password prompt would
-hang; password transfer is masked by the Hermes runtime). `install.sh`,
-`ufw`, and `systemctl` all require root; `hermes_deploy.sh` uses `sudo`
-transparently but has no explicit fail-fast if sudo would prompt.
-
-Six additive changes (existing paths unchanged):
-
-1. **`deploy/bare-metal/deploy.sh`** (new). Non-interactive parallel to
-   `hermes_deploy.sh`. Preflight checks `sudo -n true` at the very top
-   and exits with an actionable message if passwordless sudo isn't
-   available — includes the exact `/etc/sudoers.d/hermes-deploy`
-   incantation to fix it, or `sudo -v` for credential-cache. Exports
-   `DEBIAN_FRONTEND=noninteractive` before any apt calls. Verifies
-   `TARBALL_SHA256` (if set in config) before extraction. Passes
-   `ENABLE_BASIC_AUTH` through to install.sh via env var. Tees all
-   output to `/tmp/deploy-<TAG>-<pid>.log`. Fails fast on first error.
-   Pick between the two by runtime:
-   - `hermes_deploy.sh` — interactive-capable operator, sudo can prompt
-   - `deploy.sh` — non-interactive agent (Hermes runtime, CI, cron)
-
-2. **`deploy/bare-metal/rollback.sh`** (new). Undoes an install:
-   stops+disables all services and timers, removes systemd unit files,
-   `rm -rf $APP_DIR`. Preserves `<APP_DIR>-backups`, `<APP_DIR>-forge-
-   scorecard`, and `/etc/nginx/.htpasswd` by default (the whole point
-   of durable backups is surviving a rollback). Pass `--purge-data` as
-   second arg to also remove those. Nginx site config left alone
-   regardless — operator may host other sites. Same non-interactive
-   sudo preflight as deploy.sh.
-
-3. **`deploy/bare-metal/verify.sh`** (new). Standalone version of the
-   7-check verification block that used to live inside the .25
-   `hermes_deploy.sh` Phase 3. Runnable any time after a deploy: no
-   install, no changes, just PASS/FAIL/SKIP per check. Exit code is
-   number of failures (0 = all pass). Useful after a manual poke to
-   confirm state, or after a rollback+redeploy to confirm parity.
-
-4. **`docs/ISSUE_TEMPLATE/deploy-blocker.md`** (new). Structured
-   template for deploy runners to file blocker reports with specific
-   fields: runtime context (host/OS/tag/script/executor), sudo state
-   (EUID, `sudo -n` exit, NOPASSWD sudoers presence), environment
-   probes (disk/ports/prior /tmp artifacts/last log path), blockers,
-   requested changes, constraints, full environment dump. Path per
-   Luis's spec; symlink to `.github/ISSUE_TEMPLATE/` later for GitHub
-   UI integration.
-
-5. **`docs/DEPLOY_NONINTERACTIVE.md`** (new). Hermes-friendly deploy
-   guide. Documents the one-time `/etc/sudoers.d/hermes-deploy`
-   NOPASSWD setup (the ONLY sustainable non-interactive path — the
-   install genuinely needs root and there's no way around that
-   without a much larger rearchitecture). Includes a paste-ready
-   root-shell block that tees all output to `/tmp` so the operator
-   can walk away — the report at `/tmp/deploy-<TAG>-report.txt`
-   survives terminal close. Also covers standalone `verify.sh` +
-   `rollback.sh` usage with flag examples.
-
-6. **`install.sh` amendments**: (a) machine-parseable BASIC_AUTH
-   line added to the log — `[BASIC_AUTH] user=<U> password=<P>` — in
-   addition to the existing human-friendly line, so `deploy.sh` can
-   grep it out reliably. (b) `ENABLE_BASIC_AUTH` env-var default
-   block now has a comment explaining how `deploy.sh` passes it
-   through the sudo boundary (via `env ENABLE_BASIC_AUTH=... sudo
-   bash install.sh ...`).
-
-`deploy.sh` amendments in this revision:
-- Port 80/443 preflight (fail-fast, no wait)
-- TARBALL_SHA256 verification before extraction (skipped with warn
-  if config doesn't set it — for local dev iteration)
-- Structured report file at `/tmp/deploy-<TAG>-report.txt` that
-  survives terminal close (Hermes reads it after the fact)
-- On failure, captures the last 30 lines of the install.sh log
-  into the report so triage doesn't need SSH re-entry
-- Full Phase 3 verification delegated to `verify.sh` (all 7 checks
-  run, failures counted, exit code reflects them)
-
-`rollback.sh` split its single `--purge-data` flag into three
-separately-passable flags: `--wipe-backups`, `--wipe-htpasswd`,
-`--wipe-ufw` (SSH allow rule always preserved regardless — losing it
-locks out the host).
-
-`hermes_deploy.sh` from .26 unchanged and still shipped. The `.conf`
-format is unchanged; a single `.conf` file works with both scripts.
-
-## 7.23. install.sh simplification + data/clutter audits — beta-1.10.29, 2026-07-25
-
-Three pieces, all in-scope for a single tag: one subtractive code change
-plus two read-only audit deliverables. Nothing behaviourally new — the
-install-time end state on the box is identical to what beta-1.10.28
-produced; this release is about shrinking what has to be maintained and
-documenting what's on disk.
-
-**1. `deploy/bare-metal/install.sh`: 510→414 lines (−96 net; +40 / −136).**
-Subtractive audit driven by §4 of the new
-`docs/INSTALL_SIMPLIFICATION_PROPOSAL.md`. Cuts:
-- The `--app-dir=value` / `--user=value` equals-form flag branches
-  (the space-form `--app-dir value` covers every documented and
-  tested invocation; `deploy.sh` and `hermes_deploy.sh` both use the
-  space form, no live caller ever passed the equals form).
-- The 9-line "must run as root" usage banner. Every real caller now
-  reaches install.sh through `deploy.sh` / `hermes_deploy.sh`, and
-  both of those gate on `sudo -n true` (or interactive `sudo`) at
-  their own top — the banner was rehearsing the same failure mode
-  one layer deeper. `set -euo pipefail` + the first `apt-get` still
-  fail-fasts on a bare non-root invocation, just with a shorter
-  message.
-- In-script rationale comments that had grown to 8-12 lines apiece
-  around individual `rsync` / `cp` / `sed` calls. The reasoning is
-  preserved in-full in HANDOFF §7.6-§7.14 and now in
-  `docs/INSTALL_SIMPLIFICATION_PROPOSAL.md` §1-§4; the script itself
-  reads as an install script again.
-
-Structural behaviour unchanged: same apt packages, same rsync tree,
-same `sed 0.0.0.0→127.0.0.1`, same 9 systemd units, same
-BASIC_AUTH bootstrap. Verified line-by-line in the proposal doc
-before cutting.
-
-**2. `docs/CLUTTER_ASSESSMENT.md` (new).** Repo-wide audit against
-HEAD `f542dc8` (beta-1.10.28). Walks the tree, flags stale / orphaned
-/ duplicated files, proposes delete / archive / keep for each with
-one-line justification. Nothing executed — every proposed action is
-a copy-pasteable command at the bottom of the doc for Luis to run in
-his own shell (the FUSE mount is `unlink(2)`-restricted; see §7.15
-for why `git rm` / `git mv` must run outside this session).
-
-**3. `docs/DATA_INVENTORY.md` (refreshed).** Full rewrite against
-current on-disk state — the prior version had drifted enough that
-half its file paths no longer existed and several documented
-datasets had been superseded. Now aligned with what
-`data/{raw,macro,datasets}/` and `models/` actually contain as of
-today, with source-of-truth links for each.
-
-**4. `docs/INSTALL_SIMPLIFICATION_PROPOSAL.md` (new).** Source-of-truth
-for the install.sh cuts. §1 enumerates every step install.sh
-performs; §2-§3 map each step to its runtime dependency; §4 lists
-the specific subtractions applied in this tag with before/after
-justification. Kept in-tree so the next maintainer who looks at
-install.sh and asks "why is this so short compared to §7.19-§7.22?"
-has an answer without having to `git log -p` the deletion commit.
-
-No test change (install.sh is smoketested by shell, not pytest).
-Full pytest suite: unchanged from beta-1.10.28.
+**No dashboard file was modified in this tag.** The audit is the deliverable. Also re-verified on the shipping tarball built off this tag (§5 discipline): extracted, fresh venv, install requirements, `./run.sh` starts server, same endpoint set reconfirmed 200+valid on the extracted copy.
 
 ## 8. How to pick this back up
 
-1. **Latest tag is `beta-1.10.25`** as of this writing — Hermes deploy
-   tooling (`hermes_deploy.sh` + `.conf.example`, §7.20) on top of the
-   install.sh CLI-flag fix (§7.19) and the restore/backup/off-host
-   chain (§7.15-§7.18). Full test suite: 118 green (no test change in
-   .25 — script is smoketested by shell, not pytest). Ignore older
-   references in this doc to "latest is 1.10.9" — those pre-date §7.6
-   through §7.20. Ignore `beta-1.11` (see §2 for the numbering trap).
+1. **Latest tag is `beta-1.10.24`** as of this writing — install.sh
+   CLI-flag bugfix + actionable root-error (§7.19), on top of the
+   restore/backup/off-host chain (§7.15-§7.18: housekeeping, configstate
+   backup, off-host sync stub, restore playbook). Full test suite: 118
+   green. Ignore older references in this doc to "latest is 1.10.9" —
+   those pre-date §7.6 through §7.19. Ignore `beta-1.11` (see §2 for the
+   numbering trap).
 2. Confirm what state the live host is actually in — don't assume the
    latest tag is deployed just because it's tagged. `git -C /opt/predictor
    rev-parse HEAD` on the live host against `beta-1.10.16`.
