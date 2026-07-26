@@ -1,0 +1,40 @@
+{
+  "host": "openclaw-MS-7C95",
+  "timestamp": "20260726T164220Z",
+  "read_only": true,
+  "checks": {
+    "P-01_sudo_permissions": {
+      "status": "FAIL",
+      "details": "Passwordless sudo not available for user hermes"
+    },
+    "P-03_disk_space": {
+      "status": "PASS",
+      "details": "415.92 GB free space available (>= 2.0 GB required)"
+    },
+    "P-04_python_env": {
+      "status": "PASS",
+      "details": "Python 3.12 detected (>= 3.10 required)"
+    },
+    "P-05_port_availability": {
+      "status": "PASS",
+      "details": "Port 18910 active/bound on system"
+    },
+    "P-06_directory_permissions": {
+      "status": "PASS",
+      "details": "Target directory permissions writeable/valid (/media/hermes/Storage/git/antigravity-predictor)"
+    },
+    "P-07_systemd_availability": {
+      "status": "PASS",
+      "details": "Systemd systemctl active and responsive"
+    },
+    "P-08_network_connectivity": {
+      "status": "PASS",
+      "details": "Network connectivity to market API / predictor verified"
+    },
+    "P-12_model_presence": {
+      "status": "PASS",
+      "details": "All 6 production model boosters present in models/"
+    }
+  },
+  "blocker_count": 1
+}
