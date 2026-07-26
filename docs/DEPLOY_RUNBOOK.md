@@ -1,9 +1,14 @@
 # DEPLOY RUNBOOK — Linux Mint test machine
 
-**Artifact:** `antigravity-predictor-v1.11.1.tar.gz`
-**SHA256:** `c08595c1d26d35d81c9544d49968a13fffbee2617f3e5d4b0201f7e7748db93a`
-**Source:** `main` @ `ac1432d`
+**Artifact:** `dist/antigravity-predictor-v1.11.1-dacb3bc.tar.gz`
+**SHA256:** `6917b5696bdb06b7cfc216953dba00302a512fc8c020750448ecbe774e7f4570`
+**Source:** `main` @ `dacb3bc` — 261 files
 **Path:** `run.sh` (proven), NOT `install.sh` (never completed anywhere)
+
+Independently verified in this tarball: all six boosters report `internal_count=49053`
+(correct artifact, not the retracted 998-row set); `config.json` carries H-13 thresholds with
+no `execution` block, so nothing from quarantined v1.11.0 is present; `tools/preflight.sh` is
+included, so it no longer needs separate transfer.
 
 Six stages. Each has a checkpoint and a failure action. **Do not continue past a failed
 checkpoint** — every past abort came from stacking a second problem on an unresolved first.
@@ -12,27 +17,61 @@ Set these once per SSH session on the target:
 
 ```bash
 export APP=$HOME/antigravity-predictor
-export TARBALL=$HOME/antigravity-predictor-v1.11.1.tar.gz
+export TARBALL=$HOME/antigravity-predictor-v1.11.1-dacb3bc.tar.gz
 ```
 
 ---
 
-## STAGE 0 — Preflight
+## STAGE 0 — Transfer, verify, extract
 
-Copy `tools/preflight.sh` to the target and run it there. Not here. The whole point is to
+From this workstation:
+
+```bash
+D=/media/hermes/Storage/git/antigravity-predictor/dist
+scp $D/antigravity-predictor-v1.11.1-dacb3bc.tar.gz \
+    $D/antigravity-predictor-v1.11.1-dacb3bc.tar.gz.sha256 \
+    USER@TARGET:~/
+```
+
+On the target:
+
+```bash
+cd ~ && sha256sum -c antigravity-predictor-v1.11.1-dacb3bc.tar.gz.sha256
+tar xzf antigravity-predictor-v1.11.1-dacb3bc.tar.gz
+mv ~/antigravity-predictor-v1.11.1 $APP
+cd $APP && ls
+```
+
+**Checkpoint:** `sha256sum -c` prints `OK`, and `$APP` contains `run.sh`, `src/`, `models/`,
+`tools/`, `config.json`.
+**On failure:** re-transfer. Never extract an unverified tarball — silent truncation costs
+hours of debugging a "code bug" that is a bad copy.
+
+Confirm the right models landed, before anything starts:
+
+```bash
+for f in $APP/models/model_{btc,eth,sol}_{long,short}.txt; do
+  echo "$(basename $f): $(grep -m1 -o 'internal_count=[0-9]*' $f)"
+done
+```
+
+**Checkpoint:** all six report `internal_count=49053`. Any `998` means the wrong artifact —
+stop and rebuild from `dacb3bc`.
+
+---
+
+## STAGE 1 — Preflight, then prerequisites
+
+Run the preflight from the extracted tree. On the target, not here — the whole point is to
 measure that machine.
 
 ```bash
-bash ~/preflight.sh; echo "BLOCKERS: $?"
-cat ~/reports/preflight_*.json 2>/dev/null || ls reports/
+cd $APP && bash tools/preflight.sh; echo "BLOCKERS: $?"
+cat $APP/reports/preflight_*.json | tail -60
 ```
 
 **Checkpoint:** blocker count is 0, or every blocker is understood and deliberately accepted.
-**On failure:** fix the named blocker. Do not proceed with "it's probably fine."
-
----
-
-## STAGE 1 — Prerequisites
+**On failure:** fix the named blocker before continuing. Do not proceed on "probably fine."
 
 This is the single most likely point of failure. `python3` being present does **not** mean
 `python3 -m venv` works — on Mint/Debian the venv module ships separately, and its absence is
@@ -66,49 +105,9 @@ df -h $HOME | tail -1
 
 ---
 
-## STAGE 2 — Transfer and verify
+## STAGE 3 — Bootstrap
 
-From this workstation:
-
-```bash
-scp /media/hermes/Storage/git/antigravity-predictor/antigravity-predictor-v1.11.1.tar.gz \
-    /media/hermes/Storage/git/antigravity-predictor/antigravity-predictor-v1.11.1.tar.gz.sha256 \
-    /media/hermes/Storage/git/antigravity-predictor/tools/preflight.sh \
-    USER@TARGET:~/
-```
-
-On the target:
-
-```bash
-cd ~ && sha256sum -c antigravity-predictor-v1.11.1.tar.gz.sha256
-```
-
-**Checkpoint:** prints `OK`.
-**On failure:** re-transfer. Never extract an unverified tarball — silent truncation is how
-you spend two hours debugging a "code bug" that is a bad copy.
-
----
-
-## STAGE 3 — Extract and bootstrap
-
-```bash
-cd ~ && tar xzf $TARBALL
-mv ~/antigravity-predictor-v1.11.1 $APP 2>/dev/null || true
-cd $APP && ls
-```
-
-Confirm the right models landed **before** starting anything:
-
-```bash
-for f in models/model_{btc,eth,sol}_{long,short}.txt; do
-  echo "$f: $(grep -m1 -o 'internal_count=[0-9]*' $f)"
-done
-```
-
-**Checkpoint:** all six report `internal_count=49053`. If any says `998`, the wrong artifact
-was built — stop and rebuild from `ac1432d`.
-
-Then bootstrap. Takes 1–2 minutes, longer on first LightGBM wheel fetch:
+Takes 1–2 minutes, longer on first LightGBM wheel fetch:
 
 ```bash
 cd $APP && ./run.sh
