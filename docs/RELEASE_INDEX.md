@@ -73,3 +73,18 @@ Rules:
 3. `git archive` from a committed HEAD only — never `tar` a working tree.
 4. Never resolve a version by lexical tag sort. `beta-1.11` sorts after `beta-1.10.32` but
    is chronologically older; that has already caused stacked retries once.
+
+---
+
+## Housekeeping candidates
+
+Not touched, needs a human decision:
+
+| Path | Size | Note |
+|---|---|---|
+| `beta-1.1/antigravity-predictor-beta1.1.tar.gz` | **192 MB** | Almost certainly packaged a venv or dataset by mistake. 130× larger than its neighbours. |
+| `../../products/predictor_deploy.tar.gz` | **68 MB** | Outside this tree, 2026-07-17, unreferenced. |
+| `../../products/antigravity-predictor-20260718-194551.tar.gz` | 5 MB | Outside this tree, unreferenced. |
+| `beta-1.2` … `beta-1.10.15` | ~1.4 MB each | Pre-H-13 models. Historical only. |
+
+Removing the first two recovers roughly 260 MB of the 322 MB this tree occupies.
