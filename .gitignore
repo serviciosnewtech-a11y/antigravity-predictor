@@ -63,3 +63,4 @@ models/.retrain_complete
 *.tar.gz
 *.tar.gz.sha256
 dist/
+models/archive/
