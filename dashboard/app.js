@@ -1790,11 +1790,13 @@ function applySnapshot(sym, snap) {
   // populating despite models loading" symptom Hermes filed against .31.
   const predL = snap.prediction_long  ?? 0.0;
   const predS = snap.prediction_short ?? 0.0;
-  if (snap.latest_atr   && snap.latest_atr   > 0) state.latestATR   = snap.latest_atr;
-  if (snap.latest_close && snap.latest_close > 0) state.latestClose = snap.latest_close;
-  updateEngineUI(predL, predS, snap.signal, snap.position, snap.stats);
-  updateMarketSourceUI(sym);
-  updateAdvisoryBubble(sym, snap.signal);
+  if (sym === state.activeSymbol) {
+    if (snap.latest_atr   && snap.latest_atr   > 0) state.latestATR   = snap.latest_atr;
+    if (snap.latest_close && snap.latest_close > 0) state.latestClose = snap.latest_close;
+    updateEngineUI(predL, predS, snap.signal, snap.position, snap.stats);
+    updateMarketSourceUI(sym);
+    updateAdvisoryBubble(sym, snap.signal);
+  }
 
   if (snap.candles && snap.candles.length > 0) {
     if (state.activeTimeframe === "15m") {
@@ -2068,19 +2070,18 @@ function updateEngineUI(predL, predS, signal, position, stats) {
 function updatePriceLevels(signal, close, atr) {
   const isLong = signal === "BUY";
   const tp1Mult = 1.5, tp2Mult = 2.5, slMult = 1.0;
-  const feeDrag = close * 0.0015; // ~0.15% round-trip fee
 
   let entry, sl, tp1, tp2;
   if (isLong) {
     entry = close;
-    sl    = close - slMult  * atr - feeDrag;
-    tp1   = close + tp1Mult * atr - feeDrag;
-    tp2   = close + tp2Mult * atr - feeDrag;
+    sl    = close - slMult  * atr;
+    tp1   = close + tp1Mult * atr;
+    tp2   = close + tp2Mult * atr;
   } else {
     entry = close;
-    sl    = close + slMult  * atr + feeDrag;
-    tp1   = close - tp1Mult * atr + feeDrag;
-    tp2   = close - tp2Mult * atr + feeDrag;
+    sl    = close + slMult  * atr;
+    tp1   = close - tp1Mult * atr;
+    tp2   = close - tp2Mult * atr;
   }
 
   const risk   = Math.abs(entry - sl);
