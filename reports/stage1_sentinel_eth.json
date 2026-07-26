@@ -1,10 +1,10 @@
 {
   "symbol": "ETH/USDT",
   "is_null_control": false,
-  "is_sentinel_run": false,
+  "is_sentinel_run": true,
   "feature_source": "predictor_server.build_features",
   "availability_assertion_passed": true,
-  "n_features": 65,
+  "n_features": 57,
   "feature_names": [
     "log_return_1",
     "log_return_3",
@@ -62,15 +62,7 @@
     "sol_return_1",
     "sol_return_3",
     "sol_trend",
-    "sol_volume_block",
-    "btc_1h_trend_direction",
-    "btc_1h_trend_strength",
-    "btc_1h_return_3",
-    "btc_1h_atr_percentile",
-    "btc_4h_trend_direction",
-    "btc_4h_trend_strength",
-    "btc_4h_return_3",
-    "btc_4h_atr_percentile"
+    "sol_volume_block"
   ],
   "total_bars": 70100,
   "tie_policy": "exclude",
@@ -86,131 +78,131 @@
     "roundtrip_taker_bps": 11.0,
     "slippage_bps": 0.0
   },
-  "test_auc": 0.5291,
+  "test_auc": 0.5299,
   "monotonic": false,
   "contiguous_positive_run": 0,
   "short_is_complement": true,
   "atr_tercile_breakdown": {
     "low": {
-      "signals": 3946,
-      "accuracy": 0.5084,
-      "net_return_pct": -0.12
+      "signals": 3949,
+      "accuracy": 0.5075,
+      "net_return_pct": -0.1249
     },
     "mid": {
-      "signals": 4315,
-      "accuracy": 0.5161,
-      "net_return_pct": -0.1134
+      "signals": 4332,
+      "accuracy": 0.5203,
+      "net_return_pct": -0.1167
     },
     "high": {
-      "signals": 4461,
-      "accuracy": 0.5147,
-      "net_return_pct": -0.1069
+      "signals": 4514,
+      "accuracy": 0.5266,
+      "net_return_pct": -0.0974
     }
   },
   "session_breakdown": {
     "asia": {
-      "signals": 4445,
-      "accuracy": 0.5152,
-      "net_return_pct": -0.1143
+      "signals": 4506,
+      "accuracy": 0.5178,
+      "net_return_pct": -0.1152
     },
     "london": {
-      "signals": 3415,
-      "accuracy": 0.504,
-      "net_return_pct": -0.1229
+      "signals": 3395,
+      "accuracy": 0.5063,
+      "net_return_pct": -0.1202
     },
     "newyork": {
-      "signals": 4849,
-      "accuracy": 0.5195,
+      "signals": 4901,
+      "accuracy": 0.5279,
       "net_return_pct": -0.1057
     }
   },
   "threshold_sweep": [
     {
       "threshold": 0.5,
-      "signal_count": 12722,
-      "directional_accuracy": 0.5132,
-      "gross_mean_return_pct": -0.0032,
-      "net_mean_return_pct": -0.1132,
-      "underpowered": false
-    },
-    {
-      "threshold": 0.51,
-      "signal_count": 10744,
-      "directional_accuracy": 0.5181,
+      "signal_count": 12795,
+      "directional_accuracy": 0.5186,
       "gross_mean_return_pct": -0.0024,
       "net_mean_return_pct": -0.1124,
       "underpowered": false
     },
     {
+      "threshold": 0.51,
+      "signal_count": 10829,
+      "directional_accuracy": 0.5203,
+      "gross_mean_return_pct": -0.0018,
+      "net_mean_return_pct": -0.1118,
+      "underpowered": false
+    },
+    {
       "threshold": 0.52,
-      "signal_count": 8791,
-      "directional_accuracy": 0.5235,
-      "gross_mean_return_pct": -0.0011,
-      "net_mean_return_pct": -0.1111,
+      "signal_count": 8780,
+      "directional_accuracy": 0.5227,
+      "gross_mean_return_pct": -0.0014,
+      "net_mean_return_pct": -0.1114,
       "underpowered": false
     },
     {
       "threshold": 0.53,
-      "signal_count": 6859,
-      "directional_accuracy": 0.5307,
-      "gross_mean_return_pct": 0.0011,
-      "net_mean_return_pct": -0.1089,
+      "signal_count": 6758,
+      "directional_accuracy": 0.5253,
+      "gross_mean_return_pct": 0.0003,
+      "net_mean_return_pct": -0.1097,
       "underpowered": false
     },
     {
       "threshold": 0.54,
-      "signal_count": 5106,
-      "directional_accuracy": 0.538,
-      "gross_mean_return_pct": 0.0001,
-      "net_mean_return_pct": -0.1099,
+      "signal_count": 4963,
+      "directional_accuracy": 0.5342,
+      "gross_mean_return_pct": 0.0038,
+      "net_mean_return_pct": -0.1062,
       "underpowered": false
     },
     {
       "threshold": 0.55,
-      "signal_count": 3622,
-      "directional_accuracy": 0.537,
-      "gross_mean_return_pct": -0.0063,
-      "net_mean_return_pct": -0.1163,
+      "signal_count": 3442,
+      "directional_accuracy": 0.5357,
+      "gross_mean_return_pct": 0.0016,
+      "net_mean_return_pct": -0.1084,
       "underpowered": false
     },
     {
       "threshold": 0.56,
-      "signal_count": 2470,
-      "directional_accuracy": 0.534,
-      "gross_mean_return_pct": -0.0066,
-      "net_mean_return_pct": -0.1166,
+      "signal_count": 2289,
+      "directional_accuracy": 0.5347,
+      "gross_mean_return_pct": 0.0015,
+      "net_mean_return_pct": -0.1085,
       "underpowered": false
     },
     {
       "threshold": 0.57,
-      "signal_count": 1611,
-      "directional_accuracy": 0.5456,
-      "gross_mean_return_pct": 0.0031,
-      "net_mean_return_pct": -0.1069,
+      "signal_count": 1457,
+      "directional_accuracy": 0.5285,
+      "gross_mean_return_pct": -0.0131,
+      "net_mean_return_pct": -0.1231,
       "underpowered": false
     },
     {
       "threshold": 0.58,
-      "signal_count": 1027,
-      "directional_accuracy": 0.5404,
-      "gross_mean_return_pct": 0.0014,
-      "net_mean_return_pct": -0.1086,
+      "signal_count": 912,
+      "directional_accuracy": 0.5406,
+      "gross_mean_return_pct": 0.0114,
+      "net_mean_return_pct": -0.0986,
       "underpowered": false
     },
     {
       "threshold": 0.59,
-      "signal_count": 622,
-      "directional_accuracy": 0.5627,
-      "gross_mean_return_pct": 0.0196,
-      "net_mean_return_pct": -0.0904,
+      "signal_count": 553,
+      "directional_accuracy": 0.557,
+      "gross_mean_return_pct": 0.034,
+      "net_mean_return_pct": -0.076,
       "underpowered": false
     },
     {
       "threshold": 0.6,
-      "signal_count": 362,
-      "directional_accuracy": 0.5691,
-      "gross_mean_return_pct": 0.0288,
-      "net_mean_return_pct": -0.0812,
+      "signal_count": 329,
+      "directional_accuracy": 0.5866,
+      "gross_mean_return_pct": 0.0583,
+      "net_mean_return_pct": -0.0517,
       "underpowered": false
     }
   ]

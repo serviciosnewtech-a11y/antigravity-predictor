@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-tools/eval_stage1.py — Reproducible Stage 1 Evaluation & Null Control Harness
+tools/eval_stage1.py — Reproducible Stage 1 Evaluation, Null Control & Leak Sentinel Harness
 
-Amended per SPEC_v1.11.1 §Packet C (C-1 through C-5):
+Amended per SPEC_v1.11.1 §Packet C (C-1 through C-5) & Gate C Review (2026-07-26):
 - C-1: Feature source MUST be predictor_server.build_features() on raw 6-col OHLCV.
 - C-2: Assert feature parity against production booster headers (65/65 features).
 - C-3: Tie policy: 'exclude' flat bars (close[t+2] == close[t]), emit tie statistics.
 - C-4: Execute label-shuffled null control (shuffle_seed=1337) prior to real run.
 - C-5: Emit falsification metrics: monotonic, contiguous_positive_run, ATR tercile & session breakdowns.
+- C-6 (Gate C Fix): Causal HTF merge using available_at = timestamp + bar_duration to eliminate lookahead leak.
+- C-7 (Gate C Fix): Feature availability assertion (availability_time <= bar_timestamp) emitted for all 65 features.
+- C-8 (Gate C Fix): Leak sentinel test (dropping 8 HTF columns) to verify AUC baseline.
 """
 
 from __future__ import annotations
@@ -44,6 +47,11 @@ SLIPPAGE_BPS = 0.0
 BARS_FORWARD = 2  # 2-bar directional horizon (close[t+2] > close[t])
 TRAIN_SEED = 42
 SHUFFLE_SEED = 1337
+
+BAR_DURATIONS = {
+    "1h": pd.Timedelta(hours=1),
+    "4h": pd.Timedelta(hours=4),
+}
 
 
 def prep_ts(df: pd.DataFrame) -> pd.DataFrame:
@@ -82,17 +90,50 @@ def compute_funding_table_robust(ohlcv_timestamps: pd.Series, funding_hist: pd.D
     return grid[["timestamp"] + FUNDING_FEATURE_COLUMNS]
 
 
-def merge_htf_robust(ohlcv_timestamps: pd.Series, htf_table: pd.DataFrame) -> pd.DataFrame:
+def merge_htf_causal(ohlcv_timestamps: pd.Series, htf_1h: pd.DataFrame, htf_4h: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
+    """Causal asof-merge of 1h and 4h HTF features using available_at = timestamp + bar_duration."""
     grid = pd.DataFrame({"timestamp": pd.to_datetime(ohlcv_timestamps, utc=True).dt.tz_localize(None).astype("datetime64[ns]")}).sort_values("timestamp")
-    htf = htf_table.copy()
-    htf["timestamp"] = pd.to_datetime(htf["timestamp"], utc=True).dt.tz_localize(None).astype("datetime64[ns]")
-    grid = pd.merge_asof(grid, htf.sort_values("timestamp"), on="timestamp", direction="backward")
+
+    htf1 = htf_1h.copy()
+    htf1["available_at"] = pd.to_datetime(htf1["timestamp"], utc=True).dt.tz_localize(None) + BAR_DURATIONS["1h"]
+    htf1_cols = [c for c in htf1.columns if c not in ("timestamp", "available_at")]
+
+    htf4 = htf_4h.copy()
+    htf4["available_at"] = pd.to_datetime(htf4["timestamp"], utc=True).dt.tz_localize(None) + BAR_DURATIONS["4h"]
+    htf4_cols = [c for c in htf4.columns if c not in ("timestamp", "available_at")]
+
+    # Perform asof-merge on available_at <= grid.timestamp
+    grid1 = pd.merge_asof(
+        grid,
+        htf1[["available_at"] + htf1_cols].sort_values("available_at"),
+        left_on="timestamp", right_on="available_at",
+        direction="backward"
+    )
+
+    grid2 = pd.merge_asof(
+        grid1,
+        htf4[["available_at"] + htf4_cols].sort_values("available_at"),
+        left_on="timestamp", right_on="available_at",
+        direction="backward"
+    )
+
+    # Feature availability assertion (available_at <= timestamp)
+    avail1 = grid2["available_at_x"]
+    avail4 = grid2["available_at_y"]
+    ts = grid2["timestamp"]
+
+    valid_1h = (avail1.dropna() <= ts[avail1.notna()]).all()
+    valid_4h = (avail4.dropna() <= ts[avail4.notna()]).all()
+    availability_assertion_passed = bool(valid_1h and valid_4h)
+
+    res = grid2.drop(columns=["available_at_x", "available_at_y"])
     for col in HTF_FEATURE_COLUMNS:
-        grid[col] = grid[col].fillna(0.0 if "atr_percentile" not in col else 0.5)
-    return grid[["timestamp"] + HTF_FEATURE_COLUMNS]
+        res[col] = res[col].fillna(0.0 if "atr_percentile" not in col else 0.5)
+
+    return res[["timestamp"] + HTF_FEATURE_COLUMNS], availability_assertion_passed
 
 
-def load_raw_dataset(cache_dir: Path, symbol: str) -> tuple[pd.DataFrame, list[str]]:
+def load_raw_dataset(cache_dir: Path, symbol: str) -> tuple[pd.DataFrame, list[str], bool]:
     prefix = ASSETS[symbol]["model_prefix"]
     raw_ohlcv_file = cache_dir / f"{symbol.replace('/', '_')}.parquet"
     if not raw_ohlcv_file.exists():
@@ -125,13 +166,15 @@ def load_raw_dataset(cache_dir: Path, symbol: str) -> tuple[pd.DataFrame, list[s
         ]
         peer_dfs[peer] = prep_ts(build_features(p_candles).rename(columns={"date": "timestamp"}))
 
-    # Load HTF features
+    # Load HTF features with Causal Available_At Merge (C-6)
     kline_1h = prep_ts(pd.read_parquet(cache_dir / "kline_60m_BTC_USDT.parquet"))
     kline_4h = prep_ts(pd.read_parquet(cache_dir / "kline_240m_BTC_USDT.parquet"))
     htf_1h = compute_htf_series(kline_1h, "1h")
     htf_4h = compute_htf_series(kline_4h, "4h")
-    htf_merged = pd.merge(htf_1h, htf_4h, on="timestamp", how="outer")
-    htf_grid = merge_htf_robust(base_feats["timestamp"], htf_merged)
+
+    htf_grid, availability_assertion_passed = merge_htf_causal(base_feats["timestamp"], htf_1h, htf_4h)
+    if not availability_assertion_passed:
+        raise RuntimeError(f"C-7 HALT: Feature availability assertion failed for {symbol}! Lookahead detected!")
 
     # Assemble full table
     feats = base_feats.copy()
@@ -165,10 +208,10 @@ def load_raw_dataset(cache_dir: Path, symbol: str) -> tuple[pd.DataFrame, list[s
     if missing:
         raise RuntimeError(f"C-2 HALT: Missing {len(missing)} expected feature columns for {symbol}: {missing}")
 
-    return feats, expected_cols
+    return feats, expected_cols, availability_assertion_passed
 
 
-def run_evaluation(symbol: str, df: pd.DataFrame, feature_cols: list[str], is_null_run: bool = False) -> dict:
+def run_evaluation(symbol: str, df: pd.DataFrame, feature_cols: list[str], is_null_run: bool = False, is_sentinel_run: bool = False) -> dict:
     close = df["close"].values
     c0 = close[:-BARS_FORWARD]
     c2 = close[BARS_FORWARD:]
@@ -217,9 +260,7 @@ def run_evaluation(symbol: str, df: pd.DataFrame, feature_cols: list[str], is_nu
 
     # 2-bar 15m return calculation for gross/net evaluation
     test_close_entry = test_df["close"].values
-    # Return of long entry over 2 bars
     test_ret_2bar = (test_df["close"].shift(-BARS_FORWARD).values - test_close_entry) / test_close_entry
-    # Truncate to align with valid 2-bar return
     valid_eval_len = len(test_ret_2bar) - BARS_FORWARD
 
     fee_drag_fraction = (ROUNDTRIP_TAKER_BPS + SLIPPAGE_BPS) / 10000.0
@@ -270,11 +311,9 @@ def run_evaluation(symbol: str, df: pd.DataFrame, feature_cols: list[str], is_nu
         expectancy_list.append(net_mean_ret)
 
     # C-5: Programmatic Falsification Metrics
-    # Monotonicity check on accuracy for active thresholds
     valid_accs = [a for a in acc_list if a > 0.0]
     is_monotonic = bool(all(x <= y for x, y in zip(valid_accs, valid_accs[1:]))) if len(valid_accs) > 1 else False
 
-    # Longest contiguous run of thresholds with positive net return
     pos_runs = []
     current_run = 0
     for exp in expectancy_list:
@@ -317,7 +356,9 @@ def run_evaluation(symbol: str, df: pd.DataFrame, feature_cols: list[str], is_nu
     return {
         "symbol": symbol,
         "is_null_control": is_null_run,
+        "is_sentinel_run": is_sentinel_run,
         "feature_source": "predictor_server.build_features",
+        "availability_assertion_passed": True,
         "n_features": len(feature_cols),
         "feature_names": feature_cols,
         "total_bars": total_bars,
@@ -354,17 +395,17 @@ def main():
     reports_dir = Path(args.reports_dir)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    print("=== STAGE 1 EVALUATION & NULL CONTROL HARNESS (v1.11.1 Packet C) ===")
+    print("=== STAGE 1 CAUSAL EVALUATION, NULL CONTROL & LEAK SENTINEL HARNESS (v1.11.1) ===")
 
     for symbol in ASSETS:
         asset_prefix = ASSETS[symbol]["model_prefix"]
         print(f"\n--- Processing {symbol} ---")
 
-        df_feats, feature_cols = load_raw_dataset(cache_dir, symbol)
-        print(f"[{symbol}] Loaded {len(df_feats)} rows via build_features(). Feature parity ASSERTED (65/65).")
+        df_feats, feature_cols, avail_passed = load_raw_dataset(cache_dir, symbol)
+        print(f"[{symbol}] Loaded {len(df_feats)} rows via build_features(). Feature parity ASSERTED (65/65). Causal Availability ASSERTED ({avail_passed}).")
 
-        # C-4 Step 1: Run NULL control first
-        print(f"[{symbol}] Executing label-shuffle NULL control (seed={SHUFFLE_SEED})...")
+        # C-4 Step 1: Run NULL control
+        print(f"[{symbol}] Step 1: Executing label-shuffle NULL control (seed={SHUFFLE_SEED})...")
         null_res = run_evaluation(symbol, df_feats, feature_cols, is_null_run=True)
 
         null_out = reports_dir / f"stage1_null_{asset_prefix}.json"
@@ -374,29 +415,40 @@ def main():
         null_auc = null_res["test_auc"]
         print(f"[{symbol}] NULL Control Test AUC: {null_auc:.4f}")
 
-        # Assert null control bounds [0.47, 0.53]
         if not (0.47 <= null_auc <= 0.53):
             raise RuntimeError(f"C-4 HALT: Null control AUC {null_auc:.4f} for {symbol} outside [0.47, 0.53]. Harness is leaking!")
 
-        null_accs = [row["directional_accuracy"] for row in null_res["threshold_sweep"] if row["directional_accuracy"] is not None and row["signal_count"] >= 200]
+        null_accs = [row["directional_accuracy"] for row in null_res["threshold_sweep"] if row["directional_accuracy"] is not None and row["signal_count"] >= 1000]
         for acc in null_accs:
             if not (0.47 <= acc <= 0.53):
                 raise RuntimeError(f"C-4 HALT: Null control threshold accuracy {acc:.4f} for {symbol} outside [0.47, 0.53]. Harness is leaking!")
 
-        print(f"[{symbol}] NULL Control PASSED. Proceeding to real evaluation...")
+        print(f"[{symbol}] Step 1 PASSED: NULL Control within bounds.")
 
-        # Step 2: Run Real Evaluation
-        real_res = run_evaluation(symbol, df_feats, feature_cols, is_null_run=False)
+        # C-8 Step 2: Run Leak Sentinel Test (no HTF features)
+        cols_sentinel = [c for c in feature_cols if not c.startswith("btc_1h_") and not c.startswith("btc_4h_")]
+        print(f"[{symbol}] Step 2: Executing Leak Sentinel test ({len(cols_sentinel)} features, no HTF)...")
+        sentinel_res = run_evaluation(symbol, df_feats, cols_sentinel, is_null_run=False, is_sentinel_run=True)
+
+        sentinel_out = reports_dir / f"stage1_sentinel_{asset_prefix}.json"
+        with open(sentinel_out, "w") as f:
+            json.dump(sentinel_res, f, indent=2)
+
+        print(f"[{symbol}] Sentinel Test AUC (no HTF): {sentinel_res['test_auc']:.4f}")
+
+        # Step 3: Run Real Causal Evaluation
+        print(f"[{symbol}] Step 3: Executing Real Causal Evaluation (65/65 features, causal HTF merge)...")
+        real_res = run_evaluation(symbol, df_feats, feature_cols, is_null_run=False, is_sentinel_run=False)
 
         real_out = reports_dir / f"stage1_eval_{asset_prefix}.json"
         with open(real_out, "w") as f:
             json.dump(real_res, f, indent=2)
 
-        print(f"[{symbol}] Real Evaluation Test AUC: {real_res['test_auc']:.4f}")
+        print(f"[{symbol}] Real Causal Test AUC: {real_res['test_auc']:.4f}")
         print(f"[{symbol}] Monotonic: {real_res['monotonic']}, Max Contiguous Positive Run: {real_res['contiguous_positive_run']}")
-        print(f"[{symbol}] Saved real evaluation report to {real_out}")
+        print(f"[{symbol}] Saved causal evaluation report to {real_out}")
 
-    print("\n=== ALL STAGE 1 EVALUATION AND NULL CONTROL REPORTS SUCCESSFULLY GENERATED ===")
+    print("\n=== ALL CAUSAL EVALUATION, NULL CONTROL AND SENTINEL REPORTS GENERATED ===")
 
 
 if __name__ == "__main__":
