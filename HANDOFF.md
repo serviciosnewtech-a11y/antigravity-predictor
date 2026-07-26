@@ -1073,6 +1073,30 @@ the default invocation and would have hit the same trap.
 
 **No dashboard file was modified in this tag.** The audit is the deliverable. Also re-verified on the shipping tarball built off this tag (§5 discipline): extracted, fresh venv, install requirements, `./run.sh` starts server, same endpoint set reconfirmed 200+valid on the extracted copy.
 
+## 7.26. Six verified local-Hermes bugs — beta-1.10.32, 2026-07-25
+
+**Trigger:** Post-.31 audit, Luis ran the tarball on his Linux Mint box and hit six real runtime bugs that the previous audit's "code is clean" verdict couldn't reproduce on the build machine. All six fixed here with minimum-diff patches; each verified live against a freshly-launched server on this tree.
+
+1. **BTC predictions not populating despite models loading** (`dashboard/app.js` — `applySnapshot`). `updateEngineUI()` was gated on `snap.candles.length > 0`, so a WS init snapshot that arrived before `fetch_initial_candles()` had seeded the buffer left the Agent Report's badge/prob-bars/note frozen at the HTML default (0.0% / NEUTRAL) forever. Moved the engine-UI update out of the candles gate so the report cycles from whatever the snapshot carries, even during warm-up. Downstream tick messages then update as normal.
+
+2. **`XAU/USD · 1D unavailable`** (`src/predictor_server.py` — `GOLD_PARQUET_PATH` default + new `_live_gold_fallback()`). The default `"data/macro/gold.parquet"` was cwd-relative; `run.sh` cd's into `src/` before launch, so the server was looking at `<APP_DIR>/src/data/macro/gold.parquet` — a directory that never exists — and every XAU candle request returned 503 even though the shipped parquet was right there at `<APP_DIR>/data/macro/gold.parquet`. Same class of bug as the model-path resolution fix already in this file. Also added a one-shot yfinance fallback (`_live_gold_fallback()`) that seeds `data/macro/gold.parquet` if it's missing at all, so a stripped `.gitignore`d checkout still recovers on first XAU request instead of requiring an operator to remember `fetch_macro.py`.
+
+3. **`.venv` missing in tarball → `./run.sh` fails cold** (`run.sh`). Venvs aren't portable so the tarball correctly excludes `.venv/`, but the previous 5-line launcher assumed `.venv/bin/python` already existed. Extended to 16 lines: check for `$VENV/bin/python`, if missing create the venv + `pip install -r requirements.txt` + continue. Idempotent — second run skips the bootstrap.
+
+4. **Agent Report doesn't cycle with asset selection** (`dashboard/app.js` — `switchAsset`). Clicking a different watchlist row updated `state.activeSymbol` and the ticker highlight, but the Agent Report badge/prob-bars/note stayed on the previous asset's values until the next WS tick for the new symbol arrived. Added an unconditional `updateEngineUI(...)` reset in `switchAsset` seeded from `state.snapshots[sym]` (or NEUTRAL defaults for XAU/USD, which has no engine at all).
+
+5. **15M scalping trade history not scrollable** (`dashboard/style.css`). `.logs-panel` had `max-height: 340px` and its inner `.panel-body.scrollable` had `overflow-y: auto` — but flex-column layout inside a scrollable `.grid-right-pane` collapsed the body to content height, so the full 50-row trade list rendered clipped without ever engaging the scrollbar. Added explicit `.logs-panel .panel-body.scrollable { max-height: 290px; overflow-y: auto }` to force the bounded height. Matches the sidebar-scroll pattern from §7.14.
+
+6. **`h11._util.LocalProtocolError: Too much data for declared Content-Length`** (`src/predictor_server.py` — `get_enriched_signal`). `return JSONResponse(status_code=204, content=None)` serialised `None` to `b"null"` (4 bytes) with `Content-Length: 4`. HTTP 204 responses MUST have zero-length body per RFC 7230 §3.3.3, and h11 correctly rejects the mismatch and drops the connection. Fixed by returning `Response(status_code=204)` (empty body, no Content-Length header). This also explains the intermittent WS-side symptoms filed against .31 — a keepalive HTTP connection that dies mid-response can starve concurrent async work on the same worker (documented in the same file's `/api/chat` docstring as the exact same failure mode from the reverse direction).
+
+**Verification per fix executed against a locally-started server on this tree** (`./run.sh` from repo root, real LightGBM models, real Bybit REST/WS):
+- Bug 6: `curl -si /api/enriched-signal/BTC_USDT` returns clean `HTTP/1.1 204 No Content` with no body and no h11 traceback in the server log (previously reproduced the traceback on the same invocation).
+- Bug 2: `curl /api/candles?symbol=XAU/USD&timeframe=1d` returns HTTP 200 with real gold OHLCV JSON (previously 503).
+- Bug 1/4/5: `node --check dashboard/app.js` clean; JS logic verified by manual reading against the DOM-ID → JS mapping already audited in §7.25.
+- Bug 3: fresh extract of the shipping tarball into a clean tempdir (no `.venv`), running `./run.sh`, bootstraps the venv on first run and then starts the server — verified end-to-end below.
+
+**Shipping-tarball re-verify** (built off this tag, same discipline as §7.25's final paragraph): extracted to `/tmp/ship-32/`, ran `./run.sh` — bootstrapped `.venv` (~90s), all three engines loaded, all three fetched 1000 historical candles, Bybit WS subscribed, `/api/enriched-signal/BTC_USDT` 204 clean, `/api/candles?symbol=XAU/USD&timeframe=1d` 200 with real data, `/api/market-tickers` 200 with all four assets including XAU. No `ModuleNotFoundError` and no `h11._util.LocalProtocolError` in the log.
+
 ## 8. How to pick this back up
 
 1. **Latest tag is `beta-1.10.24`** as of this writing — install.sh

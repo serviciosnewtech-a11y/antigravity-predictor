@@ -590,6 +590,13 @@ body.light-mode .tool-btn::after { background: rgba(240,242,247,0.98); }
    forever and pushed the panel below the fold instead. Fixed 2026-07-23. */
 .logs-panel { flex: 1; min-height: 200px; max-height: 340px; display: flex; flex-direction: column; }
 .logs-panel .panel-body { padding: 0 12px 12px; min-height: 0; }
+/* Explicit inner scroll: the parent .grid-right-pane already overflows and
+   .logs-panel is capped at 340px, but the .panel-body's flex:1 inside a
+   flex-column parent was collapsing to content height in some layouts, so
+   the 50-row trade table never got clipped and never scrolled internally.
+   Force the body to a bounded height so overflow-y: auto (from .scrollable)
+   actually engages — matches the sidebar-scroll pattern noted in §7.14. */
+.logs-panel .panel-body.scrollable { max-height: 290px; overflow-y: auto; }
 
 .data-table {
   width: 100%; border-collapse: collapse;

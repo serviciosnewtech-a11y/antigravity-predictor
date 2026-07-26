@@ -1715,6 +1715,25 @@ function switchAsset(sym) {
   const confBadge = document.getElementById("agent-confidence-badge");
   if (confBadge) { confBadge.textContent = "—"; confBadge.className = "agent-confidence-badge"; }
 
+  // Cycle Agent Report to the new asset immediately. Previously the report
+  // only refreshed via applySnapshot()'s updateEngineUI() call — which was
+  // gated on snap.candles.length > 0. When the new asset's snapshot was
+  // missing or hadn't been seeded with candles yet (XAU/USD has no
+  // engine at all; a freshly-switched asset before the first WS tick), the
+  // badge/prob-bars/note stayed on the PREVIOUS asset's values. Reset here
+  // unconditionally using whatever's cached, then let applySnapshot/tick
+  // overwrite when real values arrive.
+  const cachedSnap = state.snapshots[sym] || {};
+  state.latestClose = cachedSnap.latest_close ?? null;
+  state.latestATR   = cachedSnap.latest_atr ?? null;
+  updateEngineUI(
+    cachedSnap.prediction_long  ?? 0,
+    cachedSnap.prediction_short ?? 0,
+    cachedSnap.signal || "NEUTRAL",
+    cachedSnap.position || null,
+    cachedSnap.stats   || { total_pnl: 0, win_trades: 0, total_trades: 0 },
+  );
+
   // Start enriched signal polling for new asset
   startEnrichedPoll(sym);
 
@@ -1761,6 +1780,22 @@ function fetchCandlesForSymbol(sym) {
 }
 
 function applySnapshot(sym, snap) {
+  // Always cycle Agent Report (signal badge, prob bars, note) from whatever
+  // the snapshot carries — even if candles are missing. Previously this
+  // whole block was gated behind snap.candles.length > 0, so when BTC's
+  // initial WS-init snapshot arrived before fetch_initial_candles() had
+  // populated the buffer (or when a symbol has predictions but no candles
+  // shipped, e.g. after an engine restart), the Agent Report stayed on its
+  // default 0.0% / NEUTRAL placeholder forever — the "BTC predictions not
+  // populating despite models loading" symptom Hermes filed against .31.
+  const predL = snap.prediction_long  ?? 0.0;
+  const predS = snap.prediction_short ?? 0.0;
+  if (snap.latest_atr   && snap.latest_atr   > 0) state.latestATR   = snap.latest_atr;
+  if (snap.latest_close && snap.latest_close > 0) state.latestClose = snap.latest_close;
+  updateEngineUI(predL, predS, snap.signal, snap.position, snap.stats);
+  updateMarketSourceUI(sym);
+  updateAdvisoryBubble(sym, snap.signal);
+
   if (snap.candles && snap.candles.length > 0) {
     if (state.activeTimeframe === "15m") {
       state.candleSeries.setData(snap.candles);
@@ -1778,23 +1813,10 @@ function applySnapshot(sym, snap) {
     state.predShortSeries.setData([]);
 
     const last = snap.candles[snap.candles.length - 1];
-
-    // Seed live price + ATR from snapshot. atr_proxy is never present on
-    // the candle object itself (it's a transient prediction-pipeline
-    // value, not part of raw OHLCV) — the backend publishes it as a
-    // separate top-level latest_close/latest_atr pair on the snapshot.
     state.latestClose = last.close;
-    if (snap.latest_atr && snap.latest_atr > 0) state.latestATR = snap.latest_atr;
-    if (snap.latest_close) state.latestClose = snap.latest_close;
-
-    const predL = snap.prediction_long  ?? 0.0;
-    const predS = snap.prediction_short ?? 0.0;
 
     updateTickerUI(last.close, last.open);
-    updateEngineUI(predL, predS, snap.signal, snap.position, snap.stats);
     state.chart.timeScale().fitContent();
-    updateMarketSourceUI(sym);
-    updateAdvisoryBubble(sym, snap.signal);
 
     // Update active widget modules
     updateDOM(last.close);

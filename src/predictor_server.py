@@ -10,7 +10,7 @@ import lightgbm as lgb
 from collections import deque
 from pathlib import Path
 from datetime import datetime, timezone
-from fastapi import Depends, FastAPI, Header, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import Depends, FastAPI, Header, Response, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -46,11 +46,16 @@ except Exception as e:
 ASSETS = list(config["assets"].keys())          # ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 DISPLAY_ASSETS = ASSETS + ["XAU/USD"]
 MACRO_DISPLAY_ASSETS = {"XAU/USD"}
-# Relative default: resolves to /app/data/macro/gold.parquet in Docker
-# (WORKDIR /app, same as before) and to <repo-root>/data/macro/gold.parquet
-# bare-metal. Same fix as forge/db.py's FORGE_DATA_DIR — an absolute
-# "/app/..." default only worked by coincidence inside a container.
-GOLD_PARQUET_PATH = os.environ.get("GOLD_PARQUET_PATH", "data/macro/gold.parquet")
+# Resolve relative to this file, not cwd. run.sh cd's into src/ before
+# launching the server, which made the previous cwd-relative default
+# ("data/macro/gold.parquet") look for <APP_DIR>/src/data/macro/gold.parquet
+# — a directory that never exists — and every XAU/USD candle request returned
+# 503 "Gold macro feed unavailable" on bare-metal, even though the shipped
+# parquet is right there at <APP_DIR>/data/macro/gold.parquet. Same class of
+# fix as _MODELS_DIR just above and signal_log.py's LOGS_DIR.
+GOLD_PARQUET_PATH = os.environ.get("GOLD_PARQUET_PATH") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", "macro", "gold.parquet"
+)
 
 # config.json's model_long_path/model_short_path (e.g. "models/model_btc_long.txt")
 # are repo-root-relative strings, historically opened raw against cwd. That only
@@ -119,14 +124,41 @@ _GOLD_WARN_STATE: dict = {"last_warned_at": 0.0, "suppressed_count": 0}
 _GOLD_WARN_INTERVAL_S = 300.0
 
 
+def _live_gold_fallback() -> bool:
+    """One-shot yfinance pull to seed data/macro/gold.parquet when the shipped
+    parquet is missing (or was pruned) and no cron/systemd timer has run
+    fetch_macro.py yet. Returns True if the parquet is now on disk. Silent
+    False on any failure — the caller still returns 503 in that case, with
+    the same message operators used to see."""
+    try:
+        from fetch_macro import fetch_daily_ohlcv, _add_macro_features, save_parquet, MACRO_TICKERS
+        from datetime import timedelta
+        end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start = (datetime.now(timezone.utc) - timedelta(days=730)).strftime("%Y-%m-%d")
+        df = fetch_daily_ohlcv(MACRO_TICKERS["gold"], start=start, end=end)
+        df = _add_macro_features(df, "gold")
+        save_parquet(df, Path(GOLD_PARQUET_PATH))
+        logger.success(f"[macro] Live-fetched gold.parquet fallback ({len(df)} rows) -> {GOLD_PARQUET_PATH}")
+        return True
+    except Exception as exc:
+        logger.warning(f"[macro] Live gold fallback failed: {exc}")
+        return False
+
+
 def fetch_gold_daily_candles(limit: int = 300) -> list[dict]:
     """Return real daily Gold candles from the mounted macro dataset (cached, see _GOLD_CACHE above)."""
     now = time.time()
     if _GOLD_CACHE["rows"] is not None and (now - _GOLD_CACHE["loaded_at"]) < _GOLD_CACHE_TTL_S:
         return _GOLD_CACHE["rows"][-limit:]
 
-    if not os.path.exists(GOLD_PARQUET_PATH):
-        raise HTTPException(status_code=503, detail="Gold macro feed unavailable")
+    if not os.path.exists(GOLD_PARQUET_PATH) and not _live_gold_fallback():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Gold macro feed unavailable and live fallback failed. "
+                f"Run: python3 src/fetch_macro.py --data-dir data/macro --assets gold"
+            ),
+        )
     df = pd.read_parquet(GOLD_PARQUET_PATH).sort_index()
     if "timestamp" in df.columns:
         ts = pd.to_datetime(df["timestamp"], utc=True)
@@ -1308,7 +1340,11 @@ def get_enriched_signal(asset: str):
     sym = sym if sym in _enriched_signals else asset
     sig = _enriched_signals.get(sym)
     if sig is None:
-        return JSONResponse(status_code=204, content=None)
+        # HTTP 204 responses MUST have zero-length body. Passing content=None to
+        # JSONResponse serialises to b"null" (4 bytes) with Content-Length: 4,
+        # which h11 rejects with "Too much data for declared Content-Length"
+        # and drops the connection — see HANDOFF §7.26 for the live symptom.
+        return Response(status_code=204)
     return sig
 
 
