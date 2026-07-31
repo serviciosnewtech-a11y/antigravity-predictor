@@ -13,9 +13,9 @@ build scratch only, is gitignored, and is emptied after every packaging run.
 | | |
 |---|---|
 | **Tag** | `v1.11.1` |
-| **File** | `v1.11.1/antigravity-predictor-v1.11.1-7b39003.tar.gz` |
-| **SHA256** | `50610d5ce2fe699bfbfa928a6ffe64f5a433a10a965082dc7a84254fe991a8b0` |
-| **Commit** | `7b39003` on `main` |
+| **File** | `v1.11.1/antigravity-predictor-v1.11.1-9264607.tar.gz` |
+| **SHA256** | `ddb720ae79fc89fdc9f571ed5cf11b7027e3a382169c9e642863b56f025d0803` |
+| **Commit** | `9264607` on `main` |
 | **Models** | H-13 set, 65 features, `internal_count=49053` |
 | **Config** | H-13 thresholds; **no** `execution` block |
 | **Install** | `tools/bootstrap.sh` — no root, no sudo, no apt, no systemd |
@@ -26,11 +26,11 @@ Verified: checksum matches, executable bits preserved (`100755` on `bootstrap.sh
 Deploy:
 
 ```bash
-scp v1.11.1/antigravity-predictor-v1.11.1-7b39003.tar.gz{,.sha256} USER@TARGET:~/
+scp v1.11.1/antigravity-predictor-v1.11.1-9264607.tar.gz{,.sha256} USER@TARGET:~/
 # on target:
-tar xzf antigravity-predictor-v1.11.1-7b39003.tar.gz \
+tar xzf antigravity-predictor-v1.11.1-9264607.tar.gz \
   antigravity-predictor-v1.11.1/tools/bootstrap.sh --strip-components=2
-./bootstrap.sh ~/antigravity-predictor-v1.11.1-7b39003.tar.gz
+./bootstrap.sh ~/antigravity-predictor-v1.11.1-9264607.tar.gz
 cd ~/antigravity-predictor && ./run.sh
 ```
 
@@ -47,8 +47,8 @@ cd ~/antigravity-predictor && ./run.sh
 
 ## SUPERSEDED — build intermediates, safe to delete
 
-**`_superseded/`** — v1.11.1 tarballs built from `ac1432d` and `dacb3bc` during iteration.
-Never deployed anywhere. Superseded by `7b39003`. Delete whenever.
+**`_superseded/`** — v1.11.1 tarballs built from `ac1432d`, `dacb3bc`, `7b39003`, `56d98d1`, and `f9c4ba0` during iteration.
+Never deployed anywhere. Superseded by `9264607`. Delete whenever.
 
 ---
 
